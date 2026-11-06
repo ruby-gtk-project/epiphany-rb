@@ -1,7 +1,7 @@
 # frozen_string_literal: true
 
 require 'json'
-require 'net/http'
+require 'soup3'
 require 'uri'
 
 require_relative 'suggestion'
@@ -159,21 +159,22 @@ class SearchEngine
       end
     end
 
+    # Fetched through libsoup, same as every other network access in this
+    # port (OpensearchEngine, the opensearch autodiscovery download) — not
+    # through Ruby's own Net::HTTP, which upstream has no equivalent of and
+    # which would duplicate what the soup3 gem already gives this app.
     def fetch(url, user_agent)
-      URI(url).then do |uri|
-        Net::HTTP.start(uri.host, uri.port, use_ssl: uri.scheme == 'https') do |http|
-          headers = {}
+      Soup::Message.new('GET', url).then do |message|
+        Soup::Session.new.tap do |session|
           if user_agent
-            headers['User-Agent'] = user_agent
+            session.user_agent = user_agent
           end
-          http.request(Net::HTTP::Get.new(uri, headers)).then do |response|
-            unless response.is_a?(Net::HTTPSuccess)
+        end.send_and_read(message, nil).to_str.tap do
+            unless message.status_code < 400
               raise SuggestionsError,
-                "Couldn't load search engine suggestions from #{url}: #{response.code}"
+                "Couldn't load search engine suggestions from #{url}: #{message.status_code}"
             end
-            response.body
           end
-        end
       end
     end
 

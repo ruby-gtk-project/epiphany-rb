@@ -47,6 +47,11 @@ require "notification_container"
 require "floating_bar"
 require "search_entry"
 require "title_widget"
+require "bookmarks_export"
+require "bookmarks_import"
+require "opensearch_autodiscovery_link"
+require "opensearch_engine"
+require "encoding"
 
 SHOTS = File.expand_path("../tmp/shots", __dir__)
 FileUtils.rm_rf(SHOTS)
@@ -228,6 +233,88 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
     d.check("plain suggestion is not a completion") { !suggestion.completion? }
   end
 
+  # --- Model layer: bookmarks export/import round trip -----------------------
+
+  d.step("bookmarks export and import round trip") do
+    dir = Dir.mktmpdir("epiphany-bookmarks-io")
+    manager = BookmarksManager.new(filename: File.join(dir, "bookmarks.json"))
+    bookmark = Bookmark.new("https://example.org", "Example", ["work"], "1")
+    manager.add_bookmark(bookmark)
+    manager.create_tag("work")
+
+    json_path = File.join(dir, "export.json")
+    BookmarksExport.export(manager, json_path, with_tags_order: true)
+    d.check("export writes a file") { File.exist?(json_path) }
+
+    reimported = BookmarksManager.new(filename: File.join(dir, "reimported.json"))
+    BookmarksImport.import(reimported, json_path)
+    d.check("import restores the bookmark") { reimported.bookmark_by_url("https://example.org").title == "Example" }
+    d.check("import restores the tag") { reimported.tag_exists?("work") }
+
+    html_path = File.join(dir, "export.html")
+    BookmarksExport.export(manager, html_path)
+    d.check("html export contains the bookmark") { File.read(html_path).include?("https://example.org") }
+
+    html_manager = BookmarksManager.new(filename: File.join(dir, "from-html.json"))
+    BookmarksImport.import_from_html(html_manager, html_path)
+    d.check("html import restores the bookmark") { !html_manager.bookmark_by_url("https://example.org").nil? }
+
+    d.check("missing file raises BookmarksError") do
+      BookmarksImport.import(reimported, File.join(dir, "nope.json"))
+      false
+    rescue BookmarksImport::BookmarksError
+      true
+    end
+  end
+
+  # --- Model layer: OpenSearch autodiscovery + engine parsing -----------------
+
+  d.step("opensearch autodiscovery link and engine parsing") do
+    link = OpensearchAutodiscoveryLink.new("Example Search", "https://example.org/opensearch.xml")
+    d.check("autodiscovery link carries name and url") do
+      link.name == "Example Search" && link.url == "https://example.org/opensearch.xml"
+    end
+
+    description = <<~XML
+      <?xml version="1.0" encoding="UTF-8"?>
+      <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+        <ShortName>Example</ShortName>
+        <Url type="text/html" template="https://example.org/search?q={searchTerms}"/>
+      </OpenSearchDescription>
+    XML
+
+    engine = OpensearchEngine.load_from_data(link, description)
+    d.check("engine name parsed") { engine.name == "Example" }
+    d.check("engine url substitutes search terms") { engine.url == "https://example.org/search?q=%s" }
+    d.check("engine remembers its opensearch url") { engine.opensearch_url == link.url }
+
+    d.check("a description with no search terms is rejected") do
+      bad = <<~XML
+        <?xml version="1.0" encoding="UTF-8"?>
+        <OpenSearchDescription xmlns="http://a9.com/-/spec/opensearch/1.1/">
+          <ShortName>Bad</ShortName>
+          <Url type="text/html" template="https://example.org/search"/>
+        </OpenSearchDescription>
+      XML
+      OpensearchEngine.load_from_data(link, bad)
+      false
+    rescue OpensearchEngine::ParseError
+      true
+    end
+  end
+
+  # --- Model layer: text encoding title eliding and language groups ----------
+
+  d.step("text encoding details") do
+    encoding = TextEncoding.new("UTF-8", "Unicode (UTF-_8)", TextEncoding::LG_UNICODE)
+    d.check("underscore elided from the title") { encoding.title_elided == "Unicode (UTF-8)" }
+    d.check("belongs to the group it was given") { encoding.in_groups?(TextEncoding::LG_UNICODE) }
+    d.check("does not belong to an unrelated group") { !encoding.in_groups?(TextEncoding::LG_ARABIC) }
+    d.check("equal to another with the same code") do
+      encoding == TextEncoding.new("UTF-8", "anything", TextEncoding::LG_NONE)
+    end
+  end
+
   # --- Notification + container, driven through the app's own real instances,
   #     already realized because they are overlays in the window the app
   #     presented at activation. ------------------------------------------
@@ -235,8 +322,12 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
   d.step("notifications") do
     container = app.notification_container
 
-    first = Notification.new("Saved", "Bookmark added").tap(&:build)
-    dup = Notification.new("Saved", "Bookmark added").tap(&:build)
+    # container.add_notification (via append) builds the notification itself;
+    # building it again here would re-attach already-parented widgets into the
+    # grid and trip a Gtk-CRITICAL (gtk_grid_attach: child already has a
+    # parent). Hand it unbuilt, as the real show-a-notification call sites do.
+    first = Notification.new("Saved", "Bookmark added")
+    dup = Notification.new("Saved", "Bookmark added")
 
     first.show(container)
     d.check("notification shown") { container.notifications.include?(first) }
@@ -247,7 +338,7 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
 
     # Leave one more live, then shoot a tick later so the revealer has had a
     # chance to allocate before the paint.
-    $shown_notification = Notification.new("Downloading", "survey.pdf").tap(&:build)
+    $shown_notification = Notification.new("Downloading", "survey.pdf")
     $shown_notification.show(container)
 
     container.send(:remove_notification, first)

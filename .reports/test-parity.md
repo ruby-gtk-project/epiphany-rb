@@ -1,112 +1,89 @@
 # Test parity — epiphany-rb vs origin/main
 
-## Upstream census
+## Upstream census (unchanged from base round)
 
-`tests/*-test.c` on `origin/main` (confirmed via `git ls-tree -r --name-only
-origin/main | grep '^tests/'`):
+`tests/*-test.c` on `origin/main` — 17 test files (18th, `ephy-test-utils.c`,
+is shared helper code, not a suite):
 
-1. `ephy-download-test.c`
-2. `ephy-embed-shell-test.c`
-3. `ephy-embed-utils-test.c`
-4. `ephy-encodings-test.c`
-5. `ephy-file-helpers-test.c`
-6. `ephy-history-test.c`
-7. `ephy-location-entry-test.c`
-8. `ephy-migration-test.c`
-9. `ephy-search-engine-manager-test.c`
-10. `ephy-session-test.c`
-11. `ephy-shell-test.c`
-12. `ephy-snapshot-service-test.c`
-13. `ephy-sqlite-test.c`
-14. `ephy-string-test.c`
-15. `ephy-test-utils.c` (helper, not a test file itself)
-16. `ephy-uri-helpers-test.c`
-17. `ephy-web-extension-test.c`
-18. `ephy-web-view-test.c`
+`ephy-download-test.c`, `ephy-embed-shell-test.c`, `ephy-embed-utils-test.c`,
+`ephy-encodings-test.c`, `ephy-file-helpers-test.c`, `ephy-history-test.c`,
+`ephy-location-entry-test.c`, `ephy-migration-test.c`,
+`ephy-search-engine-manager-test.c`, `ephy-session-test.c`,
+`ephy-shell-test.c`, `ephy-snapshot-service-test.c`, `ephy-sqlite-test.c`,
+`ephy-string-test.c`, `ephy-uri-helpers-test.c`, `ephy-web-extension-test.c`,
+`ephy-web-view-test.c`.
 
-That is 17 upstream test *files* (18th is shared test-utility code, not a
-suite of its own), each containing multiple `g_test_add_func` cases — the
-skill asks for a test-by-test census, not file-by-file, but file count alone
-already settles the question below.
+Note `ephy-download-test.c` exists upstream and now has a plausible port-side
+home (`lib/download.rb`, added this round) — flagged below.
 
-## Port side
+## Port side — re-verified this round
 
-`find spec -type f`: `spec/spec_helper.rb`, `spec/README.md`. **Zero spec
-files.** `grep -rn 'it ' spec` / `grep -rn 'describe' spec`: nothing, because
-there is nothing to grep.
-
-The only executable check in the repository is `test/drive_epiphany.rb` (298
-lines) plus `test/gtk_driver.rb` (214 lines) — a hand-rolled smoke-test
-script, not an RSpec/Minitest suite, and not mapped file-by-file or
-case-by-case to any upstream test. It asserts 42 ad hoc checks across 17
-components it chose to exercise (bookmarks add/find/tag/remove, search-engine
-default-load/custom-add/bang-parsing, permissions set/get, encodings
-load/lookup, sync hex/base64, link modifier mapping, suggestion state,
-notification show/dedupe/hide, floating-bar label, search-entry match
-counter, title-widget contract, shortcuts-dialog open, app.quit geometry
-save). None of these checks were derived from, or named after, an upstream
-`tests/*-test.c` case — they were written from scratch to fit whatever the
-port currently has.
+- `find spec -type f`: still only `spec/spec_helper.rb`, `spec/README.md`.
+  **Zero spec files**, unchanged.
+- `test/drive_epiphany.rb` grew from 42 to 65 checks across 21 named steps
+  this round, adding coverage for `Download`/`DownloadsManager` and
+  `MouseGestureController`. Ran it directly this round:
+  `nix develop --command xvfb-run -a ruby test/drive_epiphany.rb` →
+  **65 of 65 checks passed, DRIVE OK**, confirmed live, not taken on faith.
+- None of the 65 checks is named after, or derived case-by-case from, an
+  upstream `tests/*-test.c` function. They remain a hand-rolled smoke
+  script, now larger, still not a port of the upstream suite.
 
 ## Bijection check
 
-- Upstream test count: 17 files, dozens of individual `g_test_add_func`
-  cases inside them (not enumerated case-by-case here, but immaterial — the
-  file-level count alone fails).
-- Port test count mapped to an upstream test by name: **0.**
-- Every one of the 17 upstream test files is a gap. None has a named Ruby
-  counterpart. `ephy-location-entry-test.c`, `ephy-history-test.c`,
-  `ephy-session-test.c`, `ephy-web-view-test.c`, `ephy-shell-test.c` test
-  subsystems (`location_entry.rb`, `history_dialog.rb`/`history_service.rb`,
-  `session.rb`, `web_view.rb`, the full shell actions) that do not exist in
-  the port yet, so there is nothing to even begin porting those tests
-  against.
-- `ephy-encodings-test.c`, `ephy-search-engine-manager-test.c`: have a
-  plausible port-side home (`lib/encodings.rb`, `lib/search_engine_manager.rb`
-  both exist and are touched by the drive script) but still have **no named
-  spec** — the drive script's ad hoc assertions are not a substitute; they
-  were not written against the upstream test's cases, they were written
-  against whatever the port author decided to check this round.
+- Upstream: 17 test files.
+- Port test count mapped to an upstream test by name: **0**, unchanged.
+- `ephy-download-test.c` now has a plausible port-side home
+  (`lib/download.rb`/`lib/downloads_manager.rb` both exist and are touched
+  by the drive script) but still has no named spec ported from it — same
+  pattern as `ephy-encodings-test.c` and
+  `ephy-search-engine-manager-test.c` noted in the base round.
+- `ephy-location-entry-test.c`, `ephy-history-test.c`, `ephy-session-test.c`,
+  `ephy-web-view-test.c`, `ephy-shell-test.c` still test subsystems that do
+  not exist in the port (`location_entry.rb`, `history_dialog.rb`/
+  `history_service.rb`, `session.rb`, `web_view.rb`, the full shell action
+  set), so there is still nothing to port those tests against.
 
 ## Does the suite actually run?
 
-**No, and this is a gap in its own right, separate from the missing
-content.** `.reports/drive-2026-11-07.md` records it directly: the dev
-shell's own documented spec command —
+**Still no — re-confirmed directly this round, not assumed from the prior
+report.** Ran the dev shell's documented spec command myself:
 
 ```
-ruby -e 'require "rspec/core"; exit RSpec::Core::Runner.run(["--format", "progress", "--require", "spec_helper", "spec"])'
+nix develop --command ruby -e 'require "rspec/core"; exit RSpec::Core::Runner.run(["--format", "progress", "--require", "spec_helper", "spec"])'
 ```
 
-— fails to load, because `spec/spec_helper.rb` requires `kettle/test/rspec`,
-which the Nix-side `Gemfile` does not provide. The banner the dev shell
-prints names this as *the* way to run tests, and it does not work. There is
-no evidence in this repository that RSpec has ever successfully executed
-here — not once, for any example, because there are also no examples to run.
-A suite that has never been executed, with zero content, is a gap on two
-axes at once: it isn't ported, and the one command that would run it if it
-were ported is broken.
-
-The only thing that does run is `test/drive_epiphany.rb`, via
-`nix develop --command xvfb-run -a ruby test/drive_epiphany.rb`, and it is a
-standalone script outside the RSpec/Minitest harness the project otherwise
-sets up — it is not what `rake spec` or the dev-shell's spec command invokes.
+Result: `LoadError: cannot load such file -- kettle/test/rspec`, raised from
+`spec/spec_helper.rb:23`. The run then reports "0 examples, 0 failures, 2
+errors occurred outside of examples" and **exits 0** — which is itself worth
+flagging: a broken spec load that exits zero reads as "passed, nothing to
+do" to any automation that checks only the exit code, when what actually
+happened is the suite never loaded. Nothing in this round's code changed
+this; it is the same pre-existing packaging gap the base round found
+(`kettle-test`/`kettle-dev` unresolved in the offline Nix environment), still
+unfixed, re-verified live rather than carried forward on trust.
 
 ## Runtime gate cross-check
 
-This round's gate reports "42 checks passed, 0 failed, covering 17
-components." Per the task's framing, a component no check exercises is
-unverified, not done — and the inverse also holds here: a check that is not
-a named port of an upstream test is evidence the *script* works, not evidence
-of test *parity*. The 42-check pass is real and does show those 17
-components' code paths doing something when invoked directly in-process,
-but it answers a different question than the one this skill asks (is every
-upstream test ported and run), and it is not a substitute for that answer.
+This round's gate: "65 checks passed, 0 failed, covering 21 components" —
+verified true by running it. Per the task's framing, a component no check
+exercises is unverified, not done, and the inverse holds too: these 65
+checks prove `test/drive_epiphany.rb`'s 21 steps work when invoked
+in-process; they do not constitute test parity with the 17 upstream test
+files, because none of the 65 is a named port of an upstream case. The gate
+passing is real and is evidence for exactly the 21 components it names — not
+for the ~61 upstream component files (82 total minus 21 this round's drive
+touches) it does not touch, and not for the 17 upstream test files, 0 of
+which have a counterpart.
 
 ## Verdict
 
-**Gap, total — 17 of 17 upstream test files unported (0 bijection), and the
-one test-execution path the port does have (RSpec via the dev shell) is
-documented as broken, not merely empty.** `test/drive_epiphany.rb` is a
-useful, honestly-labeled smoke script, but it is not the test suite, was not
-built from the upstream census, and does not close this gap.
+**Gap, total — 17 of 17 upstream test files unported (0 bijection) — plus a
+second, independent gap: the one RSpec execution path the project documents
+is broken, confirmed broken again this round by actually running it, not
+by re-reading last round's note.** `test/drive_epiphany.rb` is larger and
+still honestly labeled, still exercises real instances, and still is not the
+test suite, was not built from the upstream census, and does not close this
+gap. The exit-code-0-on-load-failure behavior of the broken spec command is
+a second-order risk worth calling out on its own: any CI step that checks
+only "did the spec command exit nonzero" would currently call this a pass.

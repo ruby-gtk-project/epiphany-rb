@@ -5,152 +5,125 @@ widget, in the same count, with the same CSS classes, the same signals/actions,
 and the same translatable text? Verdict per component area below; "gap" means
 the axis cannot even be evaluated because the component does not exist.
 
+This revision updates the base report for what changed this round
+(`download.rb`, `downloads_manager.rb`, `mouse_gesture_controller.rb`) and
+corrects one number the prior report got wrong (see below). Every section not
+mentioned as changed is unchanged from the base audit, re-verified by reading
+the current `lib/` tree and `origin/main` directly rather than trusting the
+prior text.
+
 ## Application shell (`lib/epiphany/application.rb` ← `ephy-shell.c` + `ephy-main.c`)
 
-- **Count**: upstream installs 21 `app.` actions with accelerators (About,
-  help, preferences, new window, new incognito window, import/export
-  bookmarks, quit, shortcuts, etc.). Port installs **8**. 13 `app.` actions
-  are gap, including `app.preferences` (opens the entire preferences dialog —
-  itself unported) and `app.about` (About dialog, unported).
-- **Style**: n/a — no dialogs to carry CSS classes for the missing 13.
-- **Behaviour**: the 8 that exist match upstream's accelerators (confirmed
-  against `ephy-shell.c`'s accel table in the existing inventory). The 13
-  missing ones are not partially stubbed; they simply do not exist as
-  actions, so pressing their keyboard shortcuts upstream users rely on
-  (e.g. opening preferences) does nothing in the port.
+- **Count**: upstream installs 21 `app.` actions with accelerators. Reading
+  `lib/epiphany/application.rb` directly: the port installs **2**
+  (`shortcuts`, `quit`) — not 8, which is what the prior round's
+  `component-identification.md` claimed. Correcting that number here and in
+  `component-identification.md`. 19 of 21 `app.` actions are gap, including
+  `app.preferences` and `app.about`.
+- **Style**: n/a — no dialogs to carry CSS classes for the missing 19.
+- **Behaviour**: the 2 that exist match upstream's accelerators. The missing
+  19 are not stubbed; pressing their shortcuts does nothing.
 - **Text**: n/a for the missing actions.
-- **Verdict: gap — 13 of 21 `app.` actions missing.**
+- **Verdict: gap — 19 of 21 `app.` actions missing** (worse than previously
+  reported, because the previous count was wrong, not because anything
+  regressed).
 
 ## Main window (`ephy-window.c` → `lib/window.rb`)
 
-- Upstream: `Adw.ApplicationWindow` + `Adw.OverlaySplitView`, `Adw.TabOverview`,
-  `Adw.TabBar`, `Adw.ToastOverlay`, `Adw.Breakpoint`, a `Gtk.Revealer`, 4
-  dynamic CSS classes (`narrow`, `incognito-mode`, `devel`,
-  `automation-mode`), 46 `win.` + 9 `tab.` + 13 `toolbar.` + 33 `popup.`
-  actions (101 actions total), a password-generator popover, mouse-gesture and
-  scroll controllers.
-- Port: `lib/window.rb` does not exist. `Epiphany::Application#build` shows a
-  bare `Adw.StatusPage` in place of the window's real content (confirmed in
-  the drive report's own words: "the window's content is still a status
-  page").
-- **Verdict: gap, total.** 0 of 101 window-level actions exist. 0 of 4 dynamic
-  CSS classes exist. No tab strip, no split view, no toast overlay, no
-  password-generator popover exists to check style/behaviour/text against.
+Unchanged from the base audit. `lib/window.rb` does not exist.
+`Epiphany::Application#build` still shows a bare `Adw.StatusPage`
+(`status_page`, confirmed by reading the current file) in place of the
+window's real content, and its own description string says so plainly: "The
+browsing window is not written yet." `window_action_groups` creates four
+empty `Gio::SimpleActionGroup`s (`win`, `toolbar`, `tab`, `popup`) as
+placeholders with zero actions in any of them — confirmed by reading
+`lib/epiphany/application.rb:121`. **Verdict: gap, total.** 0 of 101
+window-level actions exist (46 `win.` + 9 `tab.` + 13 `toolbar.` + 33
+`popup.`). No tab strip, split view, toast-overlay content, or
+password-generator popover.
+
+## Mouse gestures (new this round)
+
+- Upstream: `src/ephy-mouse-gesture-controller.c` attaches a `GtkGestureDrag`
+  to the real window in the capture phase, restricted to the middle button
+  and to drags that begin over the web view.
+- Port: `lib/mouse_gesture_controller.rb` reimplements the direction-guessing
+  and action-activation logic against a `window_adapter` Struct
+  (`widget`/`action_group`) standing in for the real window, since there is
+  no web view to restrict the gesture-start check to and no real window to
+  attach to. Exercised by the drive script's single-stroke/two-stroke steps.
+- **Count**: logic ported 1:1 for the gesture-recognition algorithm.
+  **Behaviour caveat**: upstream's gesture only claims the sequence when it
+  starts over the web view widget, specifically to leave page text-selection
+  alone; the port has no web view to check against, so this constraint is
+  unverifiable until `lib/web_view.rb` exists. Flagging this rather than
+  calling it "ported": it is ported code with an unverifiable precondition.
+- **Verdict: partial.** Real logic, but untestable against its one upstream
+  safety constraint because the thing that constraint protects doesn't
+  exist in the port.
+
+## Downloads (new this round, partially)
+
+- `lib/download.rb`, `lib/downloads_manager.rb`: ported as in-process models
+  (uid counter, action enum, destination handling) exercised by the drive
+  script.
+- `downloads_popover.rb`, `download_widget.rb`, `downloads_paintable.rb`:
+  **still none exist.** No download can be shown or managed through any
+  widget; the models exist with nothing rendering them.
+- **Verdict: gap, UI entirely** (model layer now has a real candidate — the
+  one upgrade this round makes to this section versus the base report, which
+  previously listed "none exist" for the whole group including the model).
 
 ## Toolbars and location entry
 
-`action-bar.rb`, `action_bar_start.rb`, `action_bar_end.rb`,
+Unchanged, confirmed by re-listing `lib/`: `action_bar*.rb`,
 `location_entry.rb`, `location_controller.rb`, `suggestion_model.rb`,
-`page_menu_button.rb`, `site_menu_button.rb`, `notebook_context_menu.rb`,
-`tab_overview_menu.rb` — **none exist.** `suggestion.rb` (the list-item model)
-exists and is exercised by the drive script, but `SuggestionModel`, the
-`Gtk.ListView` + `Gtk.SingleSelection` + factory that actually renders
-suggestions in a popover, does not. A user cannot type a URL, see the address
-bar, or get a suggestion in the port today — there is no address bar.
-**Verdict: gap, total**, for every file in this group except the one leaf
-model class.
-
-## Downloads
-
-`downloads_popover.rb`, `download_widget.rb`, `downloads_paintable.rb`,
-`download.rb`, `downloads_manager.rb` — **none exist.** No download can be
-started, shown, or managed. **Verdict: gap, total.**
+`page_menu_button.rb`, `site_menu_button.rb` — **none exist.** No address
+bar. **Verdict: gap, total.**
 
 ## Bookmarks
 
-- Model layer (`bookmark.rb`, `bookmarks_manager.rb`, `bookmarks_import.rb`,
-  `bookmarks_export.rb`): ported, and the manager/model pair is exercised by
-  the drive script (add, find-by-url, tag indexing, remove). This is the
-  strongest area of the port.
-- UI layer (`bookmarks_dialog.rb`, `bookmark_row.rb`, `bookmark_properties.rb`):
-  **none exist.** There is no sidebar/dialog, no row widget with its drag
-  handle and move menu, no properties dialog with its tag picker. A user of
-  the port can manage bookmarks only through the Ruby API, never through a
-  window. The empty state (`Adw.StatusPage` "No Bookmarks") — a component in
-  its own right per the skill's own guidance — does not exist either, because
-  nothing renders bookmarks at all.
-- **Verdict: model has parity-eligible candidates (see test-parity for whether
-  it's actually pinned); UI is a total gap, including the empty state.**
+Unchanged. Model layer ported and exercised; UI layer
+(`bookmarks_dialog.rb`, `bookmark_row.rb`, `bookmark_properties.rb`) — none
+exist. **Verdict: model has parity-eligible candidates; UI total gap.**
 
 ## History
 
-`history_dialog.rb`, `history_dialog_row.rb` — **neither exists**, and there
-is no history model/service either (`lib/ephy-history-service*` → no
-`history_service.rb`, no `sqlite_connection.rb`). This is not "dialog missing,
-model present" — the entire history subsystem, model included, is absent.
-**Verdict: gap, total**, including both empty states (`No History Found`,
-`No Results Found`).
+Unchanged. Neither dialog nor model/service exists. **Verdict: gap, total.**
 
 ## Preferences (6 pages + dialog + supporting rows/dialogs)
 
-`prefs_dialog.rb`, `prefs_general_page.rb`, `prefs_privacy_page.rb`,
-`prefs_appearance_page.rb`, `prefs_features_page.rb`,
-`prefs_extensions_page.rb`, `prefs_search_engine_page.rb`,
-`search_engine_listbox.rb`, `search_engine_row.rb`, `lang_row.rb`,
-`prefs_lang_dialog.rb`, `webapp_additional_urls_dialog.rb`,
-`extension_view.rb` — **none exist.** There is no way to open Preferences in
-the port at all (`app.preferences` is one of the 13 missing app actions
-above). Every `Adw.SwitchRow`, every `Adw.ComboRow`, every empty state in this
-group (no-extensions card) is a total gap.
+Unchanged — confirmed `app.preferences` is still not one of the 2 actions
+that exist (it would need to be among the missing 19). **Verdict: gap,
+total**, and now there isn't even an action binding to open it.
 
-## Data views (`data_view.rb`, `clear_data_view.rb`, `passwords_view.rb`,
-`autofill_view.rb`, `autofill_storage.rb`) — none exist.
+## Data views, security/privacy, Firefox Sync, encoding UI, web extensions,
+## embed layer
 
-## Site, security, privacy (`security_dialog.rb`, `certificate_dialog.rb`,
-`privacy_report.rb`, `client_certificate_manager.rb`) — none exist. Model
-layer: `permissions_manager.rb` exists and is exercised by the drive script
-(set/get a permission, permitted-origins listing) — the one component in this
-group with a real candidate for parity.
+Unchanged from the base report; re-confirmed none of these files exist in
+`lib/`. `permissions_manager.rb`, `sync_utils.rb`, `encoding.rb`/
+`encodings.rb` model layers remain the only real candidates; no UI for any
+of them.
 
-## Firefox Sync (`firefox_sync_dialog.rb`, `synced_tabs_dialog.rb`) — neither
-exists. `sync_utils.rb` (helper, hex/base64 round trips) exists and is
-exercised.
+## Notifications
 
-## Encoding — model (`encoding.rb`, `encodings.rb`) ported and exercised
-(built-in table load, UTF-8 lookup). UI (`encoding_dialog.rb`,
-`encoding_row.rb`) — neither exists.
-
-## Web extensions — entire subsystem (`web_extension*.rb`,
-`browser_action*.rb`, `indicator_bin.rb`, `gizmo.rb`, 11-file `web_extension_api/`)
-absent. 0 of 11 API files.
-
-## Embed layer (page chrome) — `embed.rb`, `web_view.rb` (the actual WebKit
-wrapper — **the thing that renders web pages**), `find_toolbar.rb`,
-`about_handler.rb`, `reader_handler.rb`, `view_source_handler.rb`,
-`embed_autofill.rb`, `embed_prefs.rb`, `filters_manager.rb` — **none exist.**
-`search_entry.rb` and `floating_bar.rb` exist and are exercised as standalone
-widgets. The six documented upstream web-view error states (invalid TLS,
-missing file, page crash, network error, process crash, unresponsive process)
-have no port-side counterpart because there is no `WebView` class to carry
-them.
-
-## Notifications — `notification.rb` + `notification_container.rb` exist,
-match upstream's class shape (singleton container, as upstream), and are
-exercised through the app's real instances per the drive report. This is a
-second genuinely strong area.
+Unchanged, still a genuinely strong area: `notification.rb` +
+`notification_container.rb` exist and are exercised.
 
 ## Non-UI support
 
-- Settings (103 keys, 4 schemas): claimed complete; spot-checked against
-  `data/org.gnome.epiphany.gschema.xml` key count in the existing inventory —
-  consistent.
-- GResource bundle, icons, `about.css`/`error.css`/`style-elementary.css`: not
-  wired at all. Only `style.css` is ported (as `lib/styles.rb`).
-- Search provider (`shell_search_provider.rb`), web-app D-Bus provider
-  (`webapp_provider.rb`), snapshot/favicon services, SQLite/history storage:
-  none exist.
+Unchanged except `downloads_manager.rb` is no longer "none exist" (see
+Downloads above). GResource bundle, icons, `po/` wiring, search provider,
+web-app provider, snapshot/favicon services, SQLite/history storage: still
+all absent.
 
 ## Summary verdict
 
 **Not clean.** Of roughly 82 distinct upstream UI component files, the port
-has shipped UI for **zero** of them — every window, dialog, page, popover,
-and menu in the inventory is missing. The 24 files that do exist are almost
-entirely model/helper classes (bookmarks, settings, search engines,
-permissions, encodings, sync helpers) plus five small standalone widgets
-(notification, notification container, floating bar, search entry,
-shortcuts-dialog data) and two interface mixins. None of the four
-component-parity axes (count, style, behaviour, text) can be evaluated as
-"met" for the missing components because there is no component on the port
-side to measure — that absence is itself the finding, not a pass by default.
-No empty state and no error state listed in the upstream inventory exists in
-the port, because none of the screens that would show them exist.
+has shipped UI for **zero** of them — still true after this round's
+additions, which are both model/controller classes with no widget tree. The
+one number that moved against the port rather than for it: the `app.`
+action count is 2, not the 8 a prior report claimed — a correction, not a
+regression, but it means the gap on that axis is wider than this repo's own
+documentation previously said. No empty state and no error state listed in
+the upstream inventory exists in the port.

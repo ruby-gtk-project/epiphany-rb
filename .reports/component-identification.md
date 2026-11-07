@@ -1,66 +1,71 @@
-# Component identification — epiphany-rb vs origin/main
+# Component identification — epiphany-rb vs origin/main (round: downloads + mouse gestures)
 
-This report is the per-file component census the `component-identification`
-skill asks for. It does not re-derive the full inventory from scratch — that
-census already exists at `.reports/component-inventory.md`, built the same
-way this skill prescribes (blueprints first, then the C files, mapped file by
-file to the `ruby`-branch target). This report checks that census against the
-tree and adds counts the skill requires that the existing document left
-implicit.
+Updates `.reports/component-inventory.md` (the base census, still correct in
+its method and still the right place to look for the full table) for what
+changed this round: `lib/download.rb`, `lib/downloads_manager.rb`, and
+`lib/mouse_gesture_controller.rb` were added, and `test/drive_epiphany.rb`
+grew from 42 to 65 checks across 21 named steps.
 
 ## Method
 
-- `git ls-tree -r --name-only origin/main` (688 files) walked for `src/`,
-  `embed/`, `lib/` (upstream C `lib/`, not the port's), `data/`, `po/`.
-- `.blp` files read for widget trees; `.c` files read for code-built widgets,
-  actions and signal connections.
-- Port side: all 24 files under `epiphany-rb/lib/`.
+- `git ls-tree -r --name-only origin/main` walked again for `src/`, `embed/`,
+  upstream `lib/`, `data/`, `po/` — unchanged from the base census (163
+  `src/*.c`+`*.h`+`.blp` files alone; the full upstream UI surface is larger
+  once `embed/` and `.blp` templates outside `src/` are counted).
+- Port side: `find lib exe -name '*.rb'` → 26 files today (23 at the base
+  census + the 3 added this round).
+- Verified the actual action count in `lib/epiphany/application.rb` by
+  reading the file directly, rather than trusting the prior report's number.
 
-## Upstream component count (confirmed against the tree)
+## Correction to the prior round's report
+
+The base `component-identification.md` stated "GActions implemented: 8
+(`app.` only)". **That number is wrong.** Reading
+`lib/epiphany/application.rb` directly: only two `Gio::SimpleAction`s are
+ever constructed and added — `shortcuts_action` and `quit_action`
+(`app.add_action(shortcuts_action)` / `app.add_action(quit_action)`, lines
+62–63). The `ACCELERATORS` hash also only has two entries. There are no other
+`SimpleAction.new` calls anywhere in the file. **The true count is 2 of 21
+upstream `app.` actions, not 8.** This is flagged again in
+`accountability-ensurance.md` since it is a report overstating what the port
+has built, which is exactly the kind of false-green claim that skill exists
+to catch.
+
+## What this round added (confirmed by reading the files)
+
+| File | Upstream | Ported surface |
+|---|---|---|
+| `lib/download.rb` | `embed/ephy-download.c` | `Download` model: uid counter, action enum (none/browse_to/open), wraps a caller-supplied WebKit-download-shaped object |
+| `lib/downloads_manager.rb` | `embed/ephy-downloads-manager.c` (or equivalent) | `DownloadsManager`: in-process download list |
+| `lib/mouse_gesture_controller.rb` | `src/ephy-mouse-gesture-controller.c` | middle-button drag gesture → win/toolbar/tab action activation, single- and two-stroke sequences |
+
+All three carry the upstream-file-naming comment the house style requires,
+and all three are exercised by `test/drive_epiphany.rb` (confirmed by running
+the drive script — see `.reports/epiphany-rb-drive-report.md`).
+
+None of the three builds any widget chrome. `download.rb` has no
+`download_widget.rb`/`downloads_popover.rb`/`downloads_paintable.rb`
+counterpart (still 0 of those 3 files); `mouse_gesture_controller.rb` is
+attached to a `window_adapter` struct standing in for the real window, since
+`lib/window.rb` still does not exist.
+
+## Updated port component count
 
 | Facet | Count | Source |
 |---|---:|---|
-| `.blp` template files | 37 | `src/resources/gtk/*.blp` |
-| Component-bearing `.c`/`.h` pairs outside `.blp` coverage | ~45 | `ephy-window.c`, `window-commands.c`, `context-menu-commands.c`, `ephy-certificate-dialog.c`, `ephy-find-toolbar.c`, `ephy-notification*.c`, embed layer, webextension layer |
-| GActions | 122 | `app.` 21, `win.` 46, `tab.` 9, `toolbar.` 13, `popup.` 33 (counted directly off `ephy-window.c`'s `g_action_map_add_action_entries` tables and `ephy-shell.c`) |
-| Keyboard accelerators | 62 | action/accel pairs in `ephy-window.c` + `ephy-shell.c` |
-| GSettings keys | 103 across 4 schemas | `data/org.gnome.epiphany.gschema.xml` |
-| GResource entries | 37 `.ui`, 4 CSS, 1 GLSL, 30 SVG/`.gpa` | `src/resources/epiphany.gresource.xml.in` |
-| `po/LINGUAS` | 110 | `po/LINGUAS` |
-| `tests/*.c` | 18 | `git ls-tree -r --name-only origin/main | grep '^tests/.*\.c$' | wc -l` |
-
-## Port component count
-
-| Facet | Count | Source |
-|---|---:|---|
-| `lib/*.rb` files | 24 (21 flat files + `epiphany/application.rb` + `epiphany/rb/version.rb` + `epiphany.rb`) | `find lib -name '*.rb'` |
-| GActions implemented | 8 (`app.` only) | `lib/epiphany/application.rb` |
-| Keyboard accelerators wired | 8 | same file |
-| GSettings keys | 103 (claimed ported in full) | `lib/settings.rb` |
-| GResource / icon wiring | 0 — no icons, no `.ui`, no CSS beyond `style.css` | no resource bundle in the port at all |
-| `po/` / gettext wiring | 0 | no `_()`/gettext markers anywhere in `lib/`; see `.reports/translation-parity.md` |
-| `spec/*_spec.rb` | 0 — only `spec_helper.rb` and `README.md` | `find spec -type f` |
+| `lib/*.rb` + `exe/*` files | 26 | `find lib exe -name '*.rb'` |
+| `app.` GActions implemented | **2** (`shortcuts`, `quit`) — not 8 as the prior report said | read `lib/epiphany/application.rb` directly |
+| `win.`/`toolbar.`/`tab.`/`popup.` GActions implemented | 0 (the four `Gio::SimpleActionGroup`s in `window_action_groups` are created empty — placeholders for a window that doesn't exist yet) | same |
+| Keyboard accelerators wired | 2 | `ACCELERATORS` hash |
+| GSettings keys | 103 (claimed ported in full, unchanged) | `lib/settings.rb` |
+| `spec/*_spec.rb` | 0 (unchanged) | `find spec -type f` |
+| Drive-script checks | 65 (up from 42), across 21 named steps (up from 17) | ran `test/drive_epiphany.rb` directly this round — passes, confirmed |
 
 ## Verdict on this axis
 
-The identification itself (`.reports/component-inventory.md`) is accurate and
-was built correctly — blueprints read first, C files read for code-built
-chrome, one table per upstream area with upstream file, port file, kind, and
-an honest `yes` / `partial` / `no` per row. I re-walked a sample of its claims
-(window actions, GSettings keys, `po/LINGUAS`, test file count) against
-`origin/main` directly and they check out.
-
-The count that matters for parity: **of ~82 distinct upstream component files
-(37 `.blp` + ~45 code-built), the port has built the chrome for zero of
-them.** The 24 files that exist are all model/helper layer (bookmarks,
-settings, search engines, permissions, encodings, sync helpers) or four small
-standalone widgets (`notification.rb`, `notification_container.rb`,
-`floating_bar.rb`, `search_entry.rb`) plus two interface mixins (`link.rb`,
-`title_widget.rb`) and one dialog (`shortcuts_dialog.rb`, menu-data only, not
-exercised through a real `Adw.ShortcutsDialog` widget tree beyond the 62-item
-table). The main window, every toolbar, every dialog, every preferences page,
-every data view, and the entire embed/browsing layer (`ephy-window.c`,
-`ephy-web-view.c`, `ephy-embed.c`, the location entry, the tab view) are
-absent. There is no component to compare on the four parity axes for any of
-those files because none of them exist in the port yet — which is recorded
-as a gap in `.reports/component-parity.md`, not as "identified and fine."
+Still true from the base round: of ~82 distinct upstream component files (37
+`.blp` + ~45 code-built), the port has built the chrome for **zero** of
+them. This round's three new files are all model/controller layer with no
+widget tree of their own, consistent with every prior round. The identified
+census remains honest about what's missing; the one number that needed
+correcting (`app.` action count) is corrected above.

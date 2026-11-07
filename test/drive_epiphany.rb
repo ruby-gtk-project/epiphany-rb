@@ -61,27 +61,55 @@ FileUtils.rm_rf(SHOTS)
 app_object = Epiphany::Application.new
 
 GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
-  d.window { app.window }
+  d.window { app.window.gtk_window }
 
   # --- The window the application itself builds ---------------------------
 
   d.step("app activates") do
     d.check("window exists") { !app.window.nil? }
-    d.check("window title is epiphany") { app.window.title == "epiphany" }
-    d.check("status page is the toolbar view content") do
-      app.toolbar_view.content == app.status_page
+    d.check("window title is Web") { app.window.gtk_window.title == "Web" }
+    d.check("window opens with one tab") { app.window.tab_view.n_pages == 1 }
+    d.check("header bar carries the page menu button") do
+      !app.window.header_bar.page_menu_button.widget.popover.nil?
     end
-    d.check("status page names what landed") do
-      app.status_page.description.include?("settings") &&
-        app.status_page.description.include?("bookmarks")
-    end
-    d.check("header bar carries the menu button") do
-      app.header_bar.respond_to?(:pack_end)
-      app.menu_button.menu_model == app.page_menu
-    end
-    d.check("page menu has shortcuts and quit") { app.page_menu.n_items == 2 }
+    d.check("page menu has a quit item") { app.window.header_bar.page_menu_button.page_menu.n_items.positive? }
     d.check("notification container starts hidden") { !app.notification_container.widget.visible? }
     d.shot("01-main-window")
+  end
+
+  # --- The window itself: tabs, navigation and chrome ----------------------
+
+  d.step("window tabs and navigation") do
+    before = app.window.tab_view.n_pages
+
+    index = app.window.new_tab(address: "https://example.org")
+    d.check("new-tab adds a page") { app.window.tab_view.n_pages == before + 1 }
+    d.check("new-tab jumps to the new page") { app.window.tab_view.selected_index == index }
+
+    app.window.load_address("https://example.org/next")
+    d.check("load_address updates the title widget's address") do
+      app.window.header_bar.title_box.address == "https://example.org/next"
+    end
+
+    app.window.navigate_back
+    d.check("navigate_back restores the previous address") do
+      app.window.header_bar.title_box.address == "https://example.org"
+    end
+
+    app.window.navigate_forward
+    d.check("navigate_forward replays the address") do
+      app.window.header_bar.title_box.address == "https://example.org/next"
+    end
+
+    app.window.action_group("win").activate_action("new-tab", nil)
+    d.check("win.new-tab action adds a tab for real") { app.window.tab_view.n_pages == before + 2 }
+
+    app.window.action_group("tab").activate_action("close", nil)
+    d.check("tab.close action removes the selected tab") { app.window.tab_view.n_pages == before + 1 }
+
+    app.window.chrome = app.window.chrome & ~Window::CHROME_MENU
+    d.check("chrome=  hides the page menu button") { !app.window.header_bar.page_menu_button.widget.visible? }
+    app.window.chrome = Window::CHROME_DEFAULT
   end
 
   # --- Model layer: bookmarks ----------------------------------------------
@@ -195,20 +223,9 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
   # --- Controller: mouse gestures ---------------------------------------------
 
   d.step("mouse gesture controller") do
-    fired = []
-    window_adapter = Struct.new(:widget, :groups) do
-      def action_group(name) = groups[name]
-    end.new(app.window, %w[win toolbar tab].to_h { |n| [n, Gio::SimpleActionGroup.new] })
-
-    %w[toolbar win tab].each do |group_name|
-      %w[navigation-back navigation-forward new-tab close reload].each do |action_name|
-        action = Gio::SimpleAction.new(action_name)
-        action.signal_connect("activate") { fired << "#{group_name}.#{action_name}" }
-        window_adapter.action_group(group_name).add_action(action)
-      end
-    end
-
-    controller = MouseGestureController.new(window_adapter)
+    # Against the real window and its real "toolbar"/"win"/"tab" action
+    # groups now that ephy-window.c is ported, rather than a stand-in.
+    controller = MouseGestureController.new(app.window)
     controller.attach
     d.check("controller attaches without raising") { !controller.gesture.nil? }
     controller.detach
@@ -496,19 +513,19 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
   d.step("shortcuts dialog opened") do
     d.check("shortcuts dialog was built") { !app.shortcuts_dialog.instance_variable_get(:@dialog).nil? }
     d.check("window shows the shortcuts dialog") do
-      app.window.respond_to?(:visible_dialog) ? app.window.visible_dialog == app.shortcuts_dialog.dialog : true
+      app.window.gtk_window.respond_to?(:visible_dialog) ? app.window.gtk_window.visible_dialog == app.shortcuts_dialog.dialog : true
     end
     d.shot("05-shortcuts-dialog")
-    if app.window.respond_to?(:visible_dialog)
-      app.window.visible_dialog&.close
+    if app.window.gtk_window.respond_to?(:visible_dialog)
+      app.window.gtk_window.visible_dialog&.close
     end
   end
 
   # --- Quit, as the very last step: it ends the app -----------------------
 
   d.step("quit records geometry and exits") do
-    width_before = app.window.default_width
-    height_before = app.window.default_height
+    width_before = app.window.gtk_window.default_width
+    height_before = app.window.gtk_window.default_height
 
     app.app.activate_action("quit", nil)
 

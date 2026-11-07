@@ -23,17 +23,17 @@ require_relative "../link"
 require_relative "../title_widget"
 require_relative "../certificate"
 require_relative "../web_process_extension"
+require_relative "../window"
 
 module Epiphany
   # The port's application and shell: it owns the single process-wide copy of
   # each model the rest of the port reads — settings, bookmarks, search
-  # engines, permissions, encodings — and the one window built so far.
+  # engines, permissions, encodings — and the browser window.
   #
   # Stands in for upstream's src/ephy-shell.c and src/ephy-main.c as far as the
-  # ported components reach. The window itself (src/ephy-window.c) and the
-  # browsing stack are not ported yet, so the window's content is a status page
-  # listing what this round landed; the app actions below are the ones whose
-  # targets exist, bound to the accelerators src/resources/gtk/shortcuts-dialog.blp
+  # ported components reach. The browser window itself is Window
+  # (src/ephy-window.c); the app actions below are the ones whose targets
+  # exist, bound to the accelerators src/resources/gtk/shortcuts-dialog.blp
   # advertises for them.
   #
   # House style (see .claude/skills/ruby-gtk): every widget is a memoized
@@ -64,11 +64,9 @@ module Epiphany
           app.add_action(shortcuts_action)
           app.add_action(quit_action)
 
-          window.tap do |win|
+          window.gtk_window.tap do |win|
             win.content = toast_overlay
             settings.apply_to(win)
-
-            window_action_groups.each { |name, group| win.insert_action_group(name, group) }
           end
 
           mouse_gesture_controller.attach
@@ -77,17 +75,10 @@ module Epiphany
             overlay.child = overlay_layout
 
             overlay_layout.tap do |layout|
-              layout.child = toolbar_view
+              layout.child = window.content
               layout.add_overlay(notification_container.widget)
               layout.add_overlay(floating_bar.widget)
             end
-          end
-
-          toolbar_view.tap do |view|
-            view.add_top_bar(header_bar)
-            view.content = status_page
-
-            header_bar.pack_end(menu_button)
           end
 
           window.present
@@ -114,33 +105,15 @@ module Epiphany
 
     def encodings = @encodings ||= TextEncodings.new
 
-    # The "win"/"toolbar"/"tab" action groups ephy-window.c installs on the
-    # window; the window itself is not ported yet, so these are the
-    # placeholders the ported controllers that read them (currently only the
-    # mouse gesture controller) attach to, ready for ephy-window.rb to add
-    # its real actions into once it exists.
-    def window_action_groups
-      @window_action_groups ||= %w[win toolbar tab popup].to_h { |name| [name, Gio::SimpleActionGroup.new] }
-    end
-
     def mouse_gesture_controller
-      @mouse_gesture_controller ||= MouseGestureController.new(window_adapter)
+      @mouse_gesture_controller ||= MouseGestureController.new(window)
     end
 
-    # The narrow interface MouseGestureController needs from a window:
-    # `widget` to attach the gesture to and pick against, `action_group` to
-    # look up the action it should activate.
-    def window_adapter
-      @window_adapter ||= Struct.new(:widget, :groups) do
-        def action_group(name) = groups[name]
-      end.new(window, window_action_groups)
-    end
-
+    # The browser window: owns the tab strip, header bar, bottom action bar
+    # and the "win"/"toolbar"/"tab" action groups MouseGestureController and
+    # the shortcuts dialog's accelerators activate.
     def window
-      @window ||= Adwaita::ApplicationWindow.new(app).tap do |win|
-        win.title = "epiphany"
-        win.set_default_size(800, 600)
-      end
+      @window ||= Window.new(application: app, settings: settings, downloads_manager: downloads_manager)
     end
 
     def toast_overlay = @toast_overlay ||= Adwaita::ToastOverlay.new
@@ -149,37 +122,16 @@ module Epiphany
     # upstream's window keeps over the page.
     def overlay_layout = @overlay_layout ||= Gtk::Overlay.new
 
-    def toolbar_view = @toolbar_view ||= Adwaita::ToolbarView.new
-
-    def header_bar = @header_bar ||= Adwaita::HeaderBar.new
-
-    def menu_button
-      @menu_button ||= Gtk::MenuButton.new.tap do |button|
-        button.icon_name = "open-menu-symbolic"
-        button.tooltip_text = "Main Menu"
-        button.menu_model = page_menu
-      end
-    end
-
-    # The slice of src/resources/gtk/page-menu-button.blp's menu whose actions
-    # exist: the rest of that menu arrives with the page menu itself.
-    def page_menu
-      @page_menu ||= Gio::Menu.new.tap do |menu|
-        menu.append("Keyboard Shortcuts", "app.shortcuts")
-        menu.append("Quit", "app.quit")
-      end
-    end
-
     def shortcuts_action
       @shortcuts_action ||= Gio::SimpleAction.new("shortcuts").tap do |action|
-        action.signal_connect("activate") { shortcuts_dialog.present(window) }
+        action.signal_connect("activate") { shortcuts_dialog.present(window.gtk_window) }
       end
     end
 
     def quit_action
       @quit_action ||= Gio::SimpleAction.new("quit").tap do |action|
         action.signal_connect("activate") do
-          settings.record_geometry(window)
+          settings.record_geometry(window.gtk_window)
           app.quit
         end
       end
@@ -190,17 +142,5 @@ module Epiphany
     def notification_container = @notification_container ||= NotificationContainer.default
 
     def floating_bar = @floating_bar ||= FloatingBar.new
-
-    # What this round of the port landed, so the window says something true
-    # rather than advertising a browser that is not here yet.
-    def status_page
-      @status_page ||= Adwaita::StatusPage.new.tap do |page|
-        page.title = "epiphany"
-        page.description = "Ported so far: settings, bookmarks, search engines, " \
-                           "permissions, downloads, mouse gestures, encodings, notifications " \
-                           "and the shortcuts dialog. The browsing window is not written yet."
-        page.icon_name = "applications-engineering-symbolic"
-      end
-    end
   end
 end

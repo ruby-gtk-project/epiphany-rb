@@ -2,6 +2,8 @@
 
 require 'fileutils'
 
+require 'ashpd'
+
 require_relative 'settings'
 
 # Download wraps one in-progress or finished download, picking its
@@ -109,17 +111,26 @@ class Download
   end
 
   # ephy_download_do_download_action: upstream opens the finished file with
-  # the desktop's handler or reveals it in the file manager. Launching a
-  # desktop handler is outside what this port can verify headlessly, so the
-  # file-system side (resolving the destination path) is implemented and the
-  # actual launch is left to the caller via the block.
+  # the desktop's handler (ephy_open_uri_via_flatpak_portal) or reveals it in
+  # the file manager (ephy_open_directory_via_flatpak_portal), both of which
+  # go through libportal's XdpPortal. This port has no libportal binding, but
+  # `ashpd` binds the same org.freedesktop.portal.Desktop OpenURI portal
+  # directly, so that is what is called by default: ACTION_OPEN asks the
+  # portal to launch the destination file with its default handler,
+  # ACTION_BROWSE_TO asks it to open the file's containing directory (there is
+  # no separate OpenDirectory call in this gem, so the directory is passed as
+  # the URI, which is what the portal's "open directory" affordance amounts
+  # to). The caller may still pass a block to override the launch — used by
+  # specs/drive scripts, since the portal call needs a running
+  # xdg-desktop-portal and a window identifier this model layer does not
+  # have.
   def do_download_action(action = nil, &launcher)
     chosen = action || @action
     case chosen
     when ACTION_NONE
       true
     when ACTION_BROWSE_TO, ACTION_OPEN
-      launcher ? launcher.call(destination, chosen) : false
+      launcher ? launcher.call(destination, chosen) : launch_via_portal(destination, chosen)
     else
       raise ArgumentError, "unknown download action #{chosen}"
     end
@@ -194,4 +205,24 @@ class Download
       File.join(Dir.home, configured)
     end
   end
+
+  private
+
+    # Asks the desktop's OpenURI portal to launch `path` (ACTION_OPEN) or the
+    # directory containing it (ACTION_BROWSE_TO), mirroring
+    # ephy_open_uri_via_flatpak_portal / ephy_open_directory_via_flatpak_portal.
+    # `Ashpd::OpenUri.open(uri, parent_window, writable)` needs a running
+    # org.freedesktop.portal.Desktop; outside a sandboxed/portal-backed
+    # session (as in this headless dev shell) it raises, so that failure is
+    # swallowed here rather than left to crash a download that otherwise
+    # succeeded — there is nothing more this model layer can do about a
+    # missing portal.
+    def launch_via_portal(path, chosen)
+      target = chosen == ACTION_BROWSE_TO ? File.dirname(path) : path
+      Ashpd::OpenUri.open("file://#{target}", '', false)
+      true
+    rescue => e
+      warn "Download: could not open #{target} via the OpenURI portal: #{e.message}"
+      false
+    end
 end

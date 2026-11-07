@@ -21,6 +21,8 @@ require_relative "../search_entry"
 require_relative "../suggestion"
 require_relative "../link"
 require_relative "../title_widget"
+require_relative "../certificate"
+require_relative "../web_process_extension"
 
 module Epiphany
   # The port's application and shell: it owns the single process-wide copy of

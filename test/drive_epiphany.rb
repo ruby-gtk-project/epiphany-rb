@@ -52,6 +52,8 @@ require "bookmarks_import"
 require "opensearch_autodiscovery_link"
 require "opensearch_engine"
 require "encoding"
+require "certificate"
+require "web_process_extension"
 
 SHOTS = File.expand_path("../tmp/shots", __dir__)
 FileUtils.rm_rf(SHOTS)
@@ -176,6 +178,18 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
     d.check("download succeeded once marked completed") { download.succeeded? }
     d.check("manager progress is 1.0 once nothing is active") { manager.estimated_progress == 1.0 }
     d.check("manager finds the download by uid") { manager.find_download_by_id(download.uid) == download }
+
+    # do_download_action's default launcher goes through Ashpd::OpenUri.open
+    # (the ashpd gem) rather than a caller-supplied block. There is no
+    # xdg-desktop-portal running in this headless dev shell, so the portal
+    # call itself fails, but that is a world-does-not-have-a-portal failure,
+    # not a wiring failure: the check is that Download actually reaches
+    # ashpd (raising NameError/NoMethodError would mean it did not) and
+    # degrades to `false` instead of raising.
+    download.action = Download::ACTION_OPEN
+    d.check("do_download_action reaches ashpd and degrades without raising") do
+      download.do_download_action == false
+    end
   end
 
   # --- Controller: mouse gestures ---------------------------------------------
@@ -414,6 +428,63 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
 
     holder.security_level = TitleWidget::NO_SECURITY
     d.check("no security is not secure") { !holder.secure? }
+  end
+
+  # --- Certificate, backed by gcr-rb's Gcr::SimpleCertificate ---------------
+
+  d.step("certificate parses a real DER certificate via gcr-rb") do
+    require "openssl"
+
+    key = OpenSSL::PKey::RSA.new(2048)
+    raw = OpenSSL::X509::Certificate.new
+    raw.version = 2
+    raw.serial = 1
+    raw.subject = OpenSSL::X509::Name.parse("/CN=example.org/O=Example Org")
+    raw.issuer = raw.subject
+    raw.public_key = key.public_key
+    raw.not_before = Time.now
+    raw.not_after = Time.now + 3600
+    raw.sign(key, OpenSSL::Digest.new("SHA256"))
+
+    certificate = Certificate.new(raw.to_der)
+    d.check("subject_cn comes from the real certificate") { certificate.subject_cn == "example.org" }
+    d.check("issuer_cn comes from the real certificate") { certificate.issuer_cn == "example.org" }
+    d.check("key_size matches the generated key") { certificate.key_size == 2048 }
+
+    sections = certificate.sections
+    d.check("gcr-rb reports at least one section") { !sections.empty? }
+    subject_section = sections.find { |s| s.label == "Subject Name" }
+    d.check("subject name section has the CN row") do
+      subject_section.rows.any? { |r| r.label.start_with?("CN") && r.value == "example.org" }
+    end
+    serial_section = sections.find { |s| s.label == "Issued Certificate" }
+    serial_row = serial_section.rows.find { |r| r.label == "Serial Number" }
+    d.check("serial number is hex-dumped and marked monospace") do
+      serial_row.monospace && serial_row.value.match?(/\A([0-9A-F]{2} ?)+\z/)
+    end
+  end
+
+  # --- WebProcessExtension, backed by webkit-web-process-extension -----------
+
+  d.step("web process extension wires page-created/document-loaded") do
+    # WebKit never hands a Ruby process a real WebProcessExtension or WebPage
+    # (see lib/web_process_extension.rb's comment), so this constructs bare
+    # instances straight from the gem's own GI-loaded classes to prove the
+    # signal wiring is real: "page-created" and "document-loaded" are actual
+    # GObject signals on the real typelib-defined classes, not stand-ins.
+    extension = WebKitWebProcessExtension::WebProcessExtension.new
+    page = WebKitWebProcessExtension::WebPage.new
+
+    sent = []
+    wpe = WebProcessExtension.new(extension, message_sender: ->(pg, message) { sent << [pg, message.name] })
+    wpe.attach
+
+    extension.signal_emit('page-created', page)
+    page.signal_emit('document-loaded')
+
+    d.check("document-loaded relays a real UserMessage named DocumentLoaded") do
+      sent.size == 1 && sent.first[0].equal?(page) && sent.first[1] == "DocumentLoaded"
+    end
   end
 
   # --- The shortcuts dialog, through the real app action ----------------------

@@ -33,6 +33,9 @@ require "bookmarks_manager"
 require "search_engine_manager"
 require "search_engine"
 require "permissions_manager"
+require "download"
+require "downloads_manager"
+require "mouse_gesture_controller"
 require "encodings"
 require "sync_utils"
 require "opensearch_engine"
@@ -134,6 +137,62 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
     d.check("permitted origins lists it") do
       manager.permitted_origins(:show_notifications).include?("https://example.org")
     end
+  end
+
+  # --- Model layer: downloads -------------------------------------------------
+
+  d.step("download and downloads manager") do
+    fake_wk_download = Struct.new(:destination, :estimated_progress) do
+      def allow_overwrite? = false
+
+      def cancel
+        @cancelled = true
+      end
+
+      def cancelled? = !!@cancelled
+    end.new(nil, 0.5)
+
+    download = Download.new(fake_wk_download, content_type: "text/plain")
+    dir = Dir.mktmpdir("epiphany-downloads")
+    download.set_destination_for_suggested_filename("report.txt", directory: dir)
+    d.check("destination chosen under the given directory") do
+      download.destination == File.join(dir, "report.txt")
+    end
+    d.check("download starts active") { download.active? }
+
+    added = []
+    manager = DownloadsManager.new
+    manager.on_download_added { |dl| added << dl }
+    manager.add_download(download)
+    d.check("download added fires the callback") { added == [download] }
+    d.check("manager reports active downloads") { manager.active_downloads? }
+
+    download.mark_completed
+    d.check("download succeeded once marked completed") { download.succeeded? }
+    d.check("manager progress is 1.0 once nothing is active") { manager.estimated_progress == 1.0 }
+    d.check("manager finds the download by uid") { manager.find_download_by_id(download.uid) == download }
+  end
+
+  # --- Controller: mouse gestures ---------------------------------------------
+
+  d.step("mouse gesture controller") do
+    fired = []
+    window_adapter = Struct.new(:widget, :groups) do
+      def action_group(name) = groups[name]
+    end.new(app.window, %w[win toolbar tab].to_h { |n| [n, Gio::SimpleActionGroup.new] })
+
+    %w[toolbar win tab].each do |group_name|
+      %w[navigation-back navigation-forward new-tab close reload].each do |action_name|
+        action = Gio::SimpleAction.new(action_name)
+        action.signal_connect("activate") { fired << "#{group_name}.#{action_name}" }
+        window_adapter.action_group(group_name).add_action(action)
+      end
+    end
+
+    controller = MouseGestureController.new(window_adapter)
+    controller.attach
+    d.check("controller attaches without raising") { !controller.gesture.nil? }
+    controller.detach
   end
 
   # --- Model layer: encodings -----------------------------------------------

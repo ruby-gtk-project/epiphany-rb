@@ -8,6 +8,9 @@ require_relative "../encodings"
 require_relative "../bookmarks_manager"
 require_relative "../search_engine_manager"
 require_relative "../permissions_manager"
+require_relative "../download"
+require_relative "../downloads_manager"
+require_relative "../mouse_gesture_controller"
 require_relative "../sync_utils"
 require_relative "../styles"
 require_relative "../shortcuts_dialog"
@@ -62,7 +65,11 @@ module Epiphany
           window.tap do |win|
             win.content = toast_overlay
             settings.apply_to(win)
+
+            window_action_groups.each { |name, group| win.insert_action_group(name, group) }
           end
+
+          mouse_gesture_controller.attach
 
           toast_overlay.tap do |overlay|
             overlay.child = overlay_layout
@@ -101,7 +108,31 @@ module Epiphany
 
     def permissions_manager = @permissions_manager ||= PermissionsManager.new
 
+    def downloads_manager = @downloads_manager ||= DownloadsManager.new
+
     def encodings = @encodings ||= TextEncodings.new
+
+    # The "win"/"toolbar"/"tab" action groups ephy-window.c installs on the
+    # window; the window itself is not ported yet, so these are the
+    # placeholders the ported controllers that read them (currently only the
+    # mouse gesture controller) attach to, ready for ephy-window.rb to add
+    # its real actions into once it exists.
+    def window_action_groups
+      @window_action_groups ||= %w[win toolbar tab popup].to_h { |name| [name, Gio::SimpleActionGroup.new] }
+    end
+
+    def mouse_gesture_controller
+      @mouse_gesture_controller ||= MouseGestureController.new(window_adapter)
+    end
+
+    # The narrow interface MouseGestureController needs from a window:
+    # `widget` to attach the gesture to and pick against, `action_group` to
+    # look up the action it should activate.
+    def window_adapter
+      @window_adapter ||= Struct.new(:widget, :groups) do
+        def action_group(name) = groups[name]
+      end.new(window, window_action_groups)
+    end
 
     def window
       @window ||= Adwaita::ApplicationWindow.new(app).tap do |win|
@@ -164,8 +195,8 @@ module Epiphany
       @status_page ||= Adwaita::StatusPage.new.tap do |page|
         page.title = "epiphany"
         page.description = "Ported so far: settings, bookmarks, search engines, " \
-                           "permissions, encodings, notifications and the shortcuts dialog. " \
-                           "The browsing window is not written yet."
+                           "permissions, downloads, mouse gestures, encodings, notifications " \
+                           "and the shortcuts dialog. The browsing window is not written yet."
         page.icon_name = "applications-engineering-symbolic"
       end
     end

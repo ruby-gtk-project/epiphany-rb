@@ -2,6 +2,7 @@
 
 require 'gcr-rb'
 require 'gio2'
+require 'glib2'
 
 # Certificate turns a DER-encoded TLS certificate's fields into the plain
 # section/row data the security dialog displays, without building any

@@ -112,6 +112,77 @@ GtkDriver.drive(app_object, shots: SHOTS) do |d, app|
     app.window.chrome = Window::CHROME_DEFAULT
   end
 
+  # --- toolbar.navigation-back / -forward, activated as real Gio actions,
+  # not just the Window methods behind them ---------------------------------
+
+  d.step("toolbar navigation actions track history") do
+    before = app.window.tab_view.n_pages
+    app.window.new_tab(address: "https://example.org/a")
+    app.window.load_address("https://example.org/b")
+
+    toolbar = app.window.action_group("toolbar")
+    d.check("toolbar.navigation-back is enabled once there is history") { toolbar.lookup_action("navigation-back").enabled? }
+    d.check("toolbar.navigation-forward starts disabled at the head of history") { !toolbar.lookup_action("navigation-forward").enabled? }
+
+    toolbar.activate_action("navigation-back", nil)
+    d.check("toolbar.navigation-back actually moved the tab back") do
+      app.window.header_bar.title_box.address == "https://example.org/a"
+    end
+    d.check("toolbar.navigation-forward is now enabled") { toolbar.lookup_action("navigation-forward").enabled? }
+
+    toolbar.activate_action("navigation-forward", nil)
+    d.check("toolbar.navigation-forward actually moved the tab forward") do
+      app.window.header_bar.title_box.address == "https://example.org/b"
+    end
+    d.check("toolbar.navigation-back disabled check: still enabled with history behind it") do
+      toolbar.lookup_action("navigation-back").enabled?
+    end
+
+    app.window.action_group("tab").activate_action("close", nil)
+    d.check("tab closed back to the previous page count") { app.window.tab_view.n_pages == before }
+  end
+
+  # --- Page-menu actions this round installs for real: app.new-window,
+  # app.reopen-closed-tab, app.run-in-background, app.about -----------------
+
+  d.step("page-menu actions this round wires") do
+    before_secondary = app.secondary_windows.size
+    app.app.activate_action("new-window", nil)
+    d.check("app.new-window opened a real second EphyWindow") { app.secondary_windows.size == before_secondary + 1 }
+    d.check("the second window has its own tab strip") { app.secondary_windows.last.tab_view.n_pages == 1 }
+    d.check("the second window is not the primary window") { !app.secondary_windows.last.equal?(app.window) }
+
+    before_tabs = app.window.tab_view.n_pages
+    closed_before = app.window.instance_variable_get(:@closed_tabs).size
+    app.window.new_tab(address: "https://example.org/closed")
+    app.window.action_group("tab").activate_action("close", nil)
+    d.check("can_reopen_closed_tab? is true once a tab closed") { app.window.can_reopen_closed_tab? }
+    d.check("closing a tab actually pushed its history onto the closed-tab stack") do
+      app.window.instance_variable_get(:@closed_tabs).size == closed_before + 1
+    end
+
+    app.app.activate_action("reopen-closed-tab", nil)
+    d.check("app.reopen-closed-tab actually restored the tab") { app.window.tab_view.n_pages == before_tabs + 1 }
+    d.check("the reopened tab's address is the one that was closed") do
+      app.window.header_bar.title_box.address == "https://example.org/closed"
+    end
+    d.check("reopening popped the closed-tab stack back down") do
+      app.window.instance_variable_get(:@closed_tabs).size == closed_before
+    end
+    app.window.action_group("tab").activate_action("close", nil)
+
+    d.check("app.run-in-background starts without a hold") { app.instance_variable_get(:@running_in_background).nil? }
+    app.app.activate_action("run-in-background", nil)
+    d.check("app.run-in-background actually called GApplication#hold") { app.instance_variable_get(:@running_in_background) == true }
+    app.app.activate_action("run-in-background", nil)
+    d.check("app.run-in-background releases the hold again") { app.instance_variable_get(:@running_in_background) == false }
+
+    app.app.activate_action("about", nil)
+    d.check("app.about built a real Adwaita::AboutDialog") { app.about_dialog.is_a?(Adwaita::AboutDialog) }
+    d.check("the about dialog carries this gem's own version") { app.about_dialog.version == Epiphany::Rb::Version::VERSION }
+    app.about_dialog.respond_to?(:close) && app.about_dialog.close
+  end
+
   # --- Model layer: bookmarks ----------------------------------------------
 
   d.step("bookmarks manager") do

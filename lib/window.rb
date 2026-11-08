@@ -45,6 +45,7 @@ class Window
     @downloads_manager = downloads_manager
     @chrome = CHROME_DEFAULT
     @pages = {}
+    @closed_tabs = []
     build_actions
   end
 
@@ -119,8 +120,23 @@ class Window
 
   def close_tab
     selected = tab_view.selected_page
-    (@pages.delete(selected); tab_view.close_selected) if selected
+    (@closed_tabs.push(@pages.delete(selected).history); tab_view.close_selected) if selected
   end
+
+  # ephy_session_undo_close_tab: reopens the most recently closed tab with
+  # its full history restored, same as upstream replaying the closed tab's
+  # EphySessionState back into a fresh EphyEmbed.
+  def reopen_closed_tab
+    @closed_tabs.pop&.then do |history|
+      page = Page.new(placeholder_page, history, history.length - 1)
+      index = tab_view.add_tab(page.widget)
+      @pages[page.widget] = page
+      sync_title(page)
+      index
+    end
+  end
+
+  def can_reopen_closed_tab? = !@closed_tabs.empty?
 
   # window_cmd_navigation_back / _forward: move within this tab's own
   # history stack and refresh the title widget's address, same as upstream

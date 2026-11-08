@@ -24,6 +24,7 @@ require_relative "../title_widget"
 require_relative "../certificate"
 require_relative "../web_process_extension"
 require_relative "../window"
+require_relative "rb/version"
 
 module Epiphany
   # The port's application and shell: it owns the single process-wide copy of
@@ -46,8 +47,10 @@ module Epiphany
     # ported components can satisfy, with the accelerators the shortcuts
     # dialog lists for them.
     ACCELERATORS = {
-      "shortcuts" => ["<Primary>question"],
-      "quit"      => ["<Primary>Q"],
+      "shortcuts"         => ["<Primary>question"],
+      "quit"              => ["<Primary>Q"],
+      "new-window"        => ["<Primary>N"],
+      "reopen-closed-tab" => ["<Primary><Shift>T"],
     }.freeze
 
     def build
@@ -63,6 +66,10 @@ module Epiphany
 
           app.add_action(shortcuts_action)
           app.add_action(quit_action)
+          app.add_action(new_window_action)
+          app.add_action(reopen_closed_tab_action)
+          app.add_action(run_in_background_action)
+          app.add_action(about_action)
 
           window.gtk_window.tap do |win|
             win.content = toast_overlay
@@ -136,6 +143,61 @@ module Epiphany
         end
       end
     end
+
+    # window_cmd_new_window: a second, independent EphyWindow with its own
+    # tab strip, started on the same new-tab placeholder every window opens
+    # with.
+    def new_window_action
+      @new_window_action ||= Gio::SimpleAction.new("new-window").tap do |action|
+        action.signal_connect("activate") { secondary_windows.push(build_secondary_window).last.present }
+      end
+    end
+
+    # window_cmd_reopen_closed_tab: replays the active window's most
+    # recently closed tab, same as EphySession#undo_close_tab.
+    def reopen_closed_tab_action
+      @reopen_closed_tab_action ||= Gio::SimpleAction.new("reopen-closed-tab").tap do |action|
+        action.signal_connect("activate") { window.reopen_closed_tab }
+      end
+    end
+
+    # window_cmd_run_in_background from the page menu's "Run in Background"
+    # item: toggles GApplication's own hold count, the real mechanism
+    # GApplication uses to keep running with no window open, rather than a
+    # setting this port only pretends to read.
+    def run_in_background_action
+      @run_in_background_action ||= Gio::SimpleAction.new("run-in-background").tap do |action|
+        action.signal_connect("activate") do
+          @running_in_background = !@running_in_background
+          @running_in_background ? app.hold : app.release
+        end
+      end
+    end
+
+    # window_cmd_show_about, reduced to the fields this port actually has: no
+    # AdwAboutDialog debug-info/translator-credits machinery, but a real
+    # Adwaita::AboutDialog built from this gem's own metadata.
+    def about_action
+      @about_action ||= Gio::SimpleAction.new("about").tap do |action|
+        action.signal_connect("activate") { about_dialog.present(window.gtk_window) }
+      end
+    end
+
+    def about_dialog
+      @about_dialog ||= Adwaita::AboutDialog.new.tap do |dialog|
+        dialog.application_name = "Web"
+        dialog.application_icon = "web-browser-symbolic"
+        dialog.version = Epiphany::Rb::Version::VERSION
+        dialog.developer_name = "The GNOME Project"
+        dialog.website = "https://github.com/ruby-gtk-project/epiphany-rb"
+        dialog.copyright = "© The GNOME Project"
+        dialog.license_type = :gpl_3_0_only
+      end
+    end
+
+    def secondary_windows = @secondary_windows ||= []
+
+    def build_secondary_window = Window.new(application: app, settings: settings, downloads_manager: downloads_manager)
 
     def shortcuts_dialog = @shortcuts_dialog ||= ShortcutsDialog.new
 

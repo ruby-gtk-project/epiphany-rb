@@ -1,46 +1,72 @@
-# Translation parity — epiphany-rb vs origin/main
+# Translation parity — epiphany-rb vs upstream `origin/main`
 
-## Upstream catalogue (unchanged, re-confirmed)
+Audit date: 2026-11-08, against `ruby` @ `2b13b416b`.
 
-- `po/LINGUAS`: 110 languages — re-confirmed this round with
-  `git show origin/main:po/LINGUAS | tr ' ' '\n' | grep -c .` type counting
-  against the file directly.
-- `po/POTFILES.in` begins with `data/org.gnome.Epiphany.desktop.in.in`,
-  `data/org.gnome.epiphany.gschema.xml`,
-  `data/org.gnome.Epiphany.metainfo.xml.in.in` (re-read directly this round)
-  and runs to 117 source files total per the existing component inventory.
+## Upstream
 
-## Port side — re-verified this round, including the two new files
+`po/POTFILES.in` lists 122 source files marked for extraction
+(`data/org.gnome.Epiphany.desktop.in.in` through the `src/webextension/`
+tree). Sampling two of them directly:
 
-- `grep -rn "gettext\|N_(\|_(\"" lib exe`: **zero matches** across the whole
-  tree, including `lib/download.rb`, `lib/downloads_manager.rb`, and
-  `lib/mouse_gesture_controller.rb` added this round — none of the three
-  introduces a user-visible string at all (they are model/controller code
-  with no label, title, or tooltip text), so this round neither closes nor
-  widens the translation gap; it simply doesn't touch it.
-- `find . -iname '*.po' -o -iname '*.pot'` (excluding `.git`): still empty.
-  No `po/` directory, no `LINGUAS`, nothing.
-- No gettext-family gem anywhere in `Gemfile`/`epiphany-rb.gemspec`.
-- The strings that do exist and are user-visible — `lib/epiphany/application.rb`'s
-  `status_page` description ("Ported so far: settings, bookmarks..."),
-  `page_menu`'s `"Keyboard Shortcuts"`/`"Quit"`, `menu_button`'s
-  `"Main Menu"` tooltip — are all plain Ruby string literals with no msgid,
-  same as every prior round.
+```
+$ git show origin/main:src/ephy-window.c | grep -c '_("'
+100
+$ git show origin/main:src/window-commands.c | grep -c '_("'
+65
+```
 
-## Three-claim check
+165 marked strings from two files out of 122 — the full `.pot` (not checked
+in; generated at build time) runs into the thousands across the whole
+POTFILES list, and `po/LINGUAS` lists on the order of 100 shipped
+translations. This is a fully-localized GNOME app.
 
-1. **Key sets equal.** Upstream: N keys across 117 files. Port: **0**,
-   unchanged.
-2. **Byte-identical keys.** Vacuous, unchanged.
-3. **Languages ship.** 0 of 110, unchanged.
+## Port
+
+```
+$ grep -rc "gettext" lib/ exe/
+(no output — zero matches in every file)
+$ find . -iname "po" -maxdepth 2 | grep -v .git
+(no output — no po/ directory)
+```
+
+There is no `po/` directory, no `.pot`, no `gettext`/`FastGettext`/`GLib
+dgettext` call, and no `_()`/`N_()`-equivalent wrapper anywhere in `lib/` or
+`exe/`. Every user-facing string the port has written is a bare Ruby string
+literal. A sample from the files this round added, none of them translatable:
+
+```
+lib/action_bar_start.rb:   button.tooltip_text = 'Back'
+lib/action_bar_start.rb:   button.tooltip_text = 'Forward'
+lib/action_bar_start.rb:   button.tooltip_text = 'Reload'
+lib/action_bar_end.rb:     button.tooltip_text = 'Bookmarks'
+lib/action_bar_end.rb:     button.tooltip_text = 'Tab Overview'
+lib/action_bar_end.rb:     button.tooltip_text = 'Downloads'
+lib/page_menu_button.rb:   section.append('Run in Background', 'app.run-in-background')
+lib/page_menu_button.rb:   section.append('New Window', 'app.new-window')
+lib/page_menu_button.rb:   section.append('Quit', 'app.quit')
+lib/window.rb:             button.tooltip_text = 'Exit Fullscreen'
+```
+
+This is consistent with every earlier file too (`shortcuts_dialog.rb`,
+`notification.rb`, bookmarks/search-engine error messages, etc. — none of
+them were gettext-wrapped before this round either, confirmed by the same
+grep returning zero across the whole tree, not just the new files).
 
 ## Verdict
 
-**Gap, total, unchanged by this round.** The port still ships zero
-translation infrastructure: no marked strings anywhere in `lib/` (including
-the three new files), no gettext dependency, no `po/` directory, no
-catalogue, no build step, no installed language. All 110 languages upstream
-ships are silently dropped. This is not "English-only for now" — per the
-`accountability-ensurance` framing that phrase excuses rather than states
-the gap — it is zero infrastructure, confirmed again by direct grep this
-round rather than carried forward from the prior report.
+0 of the thousands of upstream `msgid`s survive, because there is no
+mechanism by which any of them *could* survive: the port has not adopted
+gettext (or any i18n library) at all. This is not "some strings missed
+translation" — it is a totally untranslated, English-only application, and
+nothing in `lib/`, `exe/`, the gemspec, or the Gemfile takes a dependency
+that would make translation possible (no `gettext`, `fast_gettext`,
+`r18n`, or similar gem is declared). `LINGUAS`'s ~100 shipped locales all
+regress to English in this port, for every string, with no partial credit:
+there is no locale in which this app currently shows anything other than
+the English literals above.
+
+The previous `.reports/translation-parity.md` from this repository's
+history already reached the same conclusion before this round's window/
+header-bar/action-bar port landed; this pass re-confirms it is still true
+after nine more files' worth of new, still-unwrapped, still-English
+strings were added on top.

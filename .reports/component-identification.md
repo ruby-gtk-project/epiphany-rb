@@ -1,71 +1,133 @@
-# Component identification — epiphany-rb vs origin/main (round: downloads + mouse gestures)
+# Component identification — epiphany-rb vs upstream `origin/main`
 
-Updates `.reports/component-inventory.md` (the base census, still correct in
-its method and still the right place to look for the full table) for what
-changed this round: `lib/download.rb`, `lib/downloads_manager.rb`, and
-`lib/mouse_gesture_controller.rb` were added, and `test/drive_epiphany.rb`
-grew from 42 to 65 checks across 21 named steps.
+Audit date: 2026-11-08. Scope: full re-pass after `2b13b416b` ("Port the
+browser window: tab strip, header bar, action bars and page menu"), which is
+the newest commit on `ruby` and the only one not covered by the previous
+`.reports/component-inventory.md` (written at `e02b16bd5`, one commit
+earlier). This file supersedes that inventory's totals for the window layer;
+the rest of that document's row-by-row table is still accurate and is
+incorporated by reference rather than retyped.
 
 ## Method
 
-- `git ls-tree -r --name-only origin/main` walked again for `src/`, `embed/`,
-  upstream `lib/`, `data/`, `po/` — unchanged from the base census (163
-  `src/*.c`+`*.h`+`.blp` files alone; the full upstream UI surface is larger
-  once `embed/` and `.blp` templates outside `src/` are counted).
-- Port side: `find lib exe -name '*.rb'` → 26 files today (23 at the base
-  census + the 3 added this round).
-- Verified the actual action count in `lib/epiphany/application.rb` by
-  reading the file directly, rather than trusting the prior report's number.
+Upstream has no `.blp`/`.ui` for most of the window chrome below
+`src/resources/gtk/*.blp` — read directly via `git show origin/main:<path>`
+for each `.c`/`.blp` pair named in the existing inventory, and diffed against
+the 9 files the latest commit added: `lib/window.rb`, `lib/header_bar.rb`,
+`lib/title_box.rb`, `lib/tab_view.rb`, `lib/page_menu_button.rb`,
+`lib/action_bar.rb`, `lib/action_bar_start.rb`, `lib/action_bar_end.rb`,
+`lib/action_helper.rb`. No GIR symbol table was rebuilt for this pass (the
+new files are plain `Gtk`/`Adwaita` boxes, buttons, menu buttons and one
+`Adwaita::TabView`/`Adwaita::TabButton`/`Adwaita::Clamp` — nothing novel to
+classify), so counts below come from direct reading, not `component-scan.sh`.
 
-## Correction to the prior round's report
+## New since last inventory
 
-The base `component-identification.md` stated "GActions implemented: 8
-(`app.` only)". **That number is wrong.** Reading
-`lib/epiphany/application.rb` directly: only two `Gio::SimpleAction`s are
-ever constructed and added — `shortcuts_action` and `quit_action`
-(`app.add_action(shortcuts_action)` / `app.add_action(quit_action)`, lines
-62–63). The `ACCELERATORS` hash also only has two entries. There are no other
-`SimpleAction.new` calls anywhere in the file. **The true count is 2 of 21
-upstream `app.` actions, not 8.** This is flagged again in
-`accountability-ensurance.md` since it is a report overstating what the port
-has built, which is exactly the kind of false-green claim that skill exists
-to catch.
+## `lib/window.rb` — the browser window (ported from `src/ephy-window.c`)
 
-## What this round added (confirmed by reading the files)
+| Widget | x | CSS | Signals/actions | Notes |
+|---|---:|---|---|---|
+| `Gtk::ApplicationWindow`/`Adwaita` window (via `gtk_window`) | 1 | — | `notify::fullscreened` | — |
+| `Adwaita::TabOverview` (`tab_overview`) | 1 | — | — | content root |
+| Action groups `win`/`toolbar`/`tab` | 3 groups, 6 actions total | — | `win.new-tab`, `win.fullscreen`, `win.show-tab-overview`, `toolbar.navigation-back` (starts disabled, never re-enabled), `toolbar.navigation-forward` (same), `toolbar.reload`, `tab.close` | **`win.privacy-report` and `win.passwords`, both referenced by `PageMenuButton#browsing_section`, are not among them** — see component-parity |
 
-| File | Upstream | Ported surface |
-|---|---|---|
-| `lib/download.rb` | `embed/ephy-download.c` | `Download` model: uid counter, action enum (none/browse_to/open), wraps a caller-supplied WebKit-download-shaped object |
-| `lib/downloads_manager.rb` | `embed/ephy-downloads-manager.c` (or equivalent) | `DownloadsManager`: in-process download list |
-| `lib/mouse_gesture_controller.rb` | `src/ephy-mouse-gesture-controller.c` | middle-button drag gesture → win/toolbar/tab action activation, single- and two-stroke sequences |
+`navigation-back`/`navigation-forward` are each built `.tap { |a| a.enabled =
+false }` and nothing in `window.rb`, `action_bar_start.rb` or the drive
+script ever sets `enabled = true`. Upstream enables/disables these from
+`WebKitBackForwardList` changes; this port has no equivalent re-enable path
+at all, so the back/forward buttons are permanently dead regardless of
+navigation history (`Page#can_go_back?`/`#can_go_forward?` are computed
+correctly but nothing reads them to drive the action's `enabled`).
 
-All three carry the upstream-file-naming comment the house style requires,
-and all three are exercised by `test/drive_epiphany.rb` (confirmed by running
-the drive script — see `.reports/epiphany-rb-drive-report.md`).
+## `lib/header_bar.rb` (`src/ephy-header-bar.c`)
 
-None of the three builds any widget chrome. `download.rb` has no
-`download_widget.rb`/`downloads_popover.rb`/`downloads_paintable.rb`
-counterpart (still 0 of those 3 files); `mouse_gesture_controller.rb` is
-attached to a `window_adapter` struct standing in for the real window, since
-`lib/window.rb` still does not exist.
+| Widget | x | CSS | Signals | Notes |
+|---|---:|---|---|---|
+| `Gtk::Box` (root) | 1 | — | — | |
+| `Adwaita::HeaderBar` | 1 | — | — | |
+| `Adwaita::Clamp` | 1 | — | — | max-size 860, tightening 560 — matches upstream constant |
+| `Gtk::Button` (restore) | 1 | — | `action_name = win.fullscreen` | visible only `fullscreened?` |
 
-## Updated port component count
+Composite children: `ActionBarStart`, `ActionBarEnd`, `PageMenuButton`,
+`TitleBox` — each identified separately below/in the prior inventory.
+Upstream's header bar picks `EphyLocationEntry` **or** `TitleBox` depending on
+`EphyEmbedShellMode`; this port's comment at `lib/header_bar.rb:18-19`
+states plainly that it "always shows the read-only TitleBox" because
+`LocationEntry` is not ported. That is a real behavioural divergence, not a
+cosmetic one: the header bar's center widget can never be typed into.
 
-| Facet | Count | Source |
-|---|---:|---|
-| `lib/*.rb` + `exe/*` files | 26 | `find lib exe -name '*.rb'` |
-| `app.` GActions implemented | **2** (`shortcuts`, `quit`) — not 8 as the prior report said | read `lib/epiphany/application.rb` directly |
-| `win.`/`toolbar.`/`tab.`/`popup.` GActions implemented | 0 (the four `Gio::SimpleActionGroup`s in `window_action_groups` are created empty — placeholders for a window that doesn't exist yet) | same |
-| Keyboard accelerators wired | 2 | `ACCELERATORS` hash |
-| GSettings keys | 103 (claimed ported in full, unchanged) | `lib/settings.rb` |
-| `spec/*_spec.rb` | 0 (unchanged) | `find spec -type f` |
-| Drive-script checks | 65 (up from 42), across 21 named steps (up from 17) | ran `test/drive_epiphany.rb` directly this round — passes, confirmed |
+## `lib/title_box.rb` (`src/ephy-title-box.c`) — ✅ faithful
 
-## Verdict on this axis
+`Gtk::Box` > `Gtk::Label.title`, `Gtk::Box.subtitle` >
+`Gtk::MenuButton.entry-icon` (security button, hidden until a security level
+is set) + `Gtk::Label` (address). Matches upstream's widget tree and the
+`TitleWidget` contract (`address`, `security_level`, `reset`). No gap found
+here.
 
-Still true from the base round: of ~82 distinct upstream component files (37
-`.blp` + ~45 code-built), the port has built the chrome for **zero** of
-them. This round's three new files are all model/controller layer with no
-widget tree of their own, consistent with every prior round. The identified
-census remains honest about what's missing; the one number that needed
-correcting (`app.` action count) is corrected above.
+## `lib/tab_view.rb` (`src/ephy-tab-view.c`) — ✅ operations real
+
+Wraps one `Adwaita::TabView`. All listed operations (`add_tab`, `close_*`,
+`pin`/`unpin`, `next`, iteration, `pinned?`) call the real `AdwTabView` API,
+confirmed by reading — no stubs. Two real gaps:
+
+- `attach_tab_bar` exists and wires an `Adwaita::TabBar`'s visibility to the
+  `tabs-bar-visibility-policy`/`expand-tabs-bar` keys, but **nothing calls
+  it** — grep `attach_tab_bar` outside its own definition and the drive
+  script returns no hits in `lib/` or `lib/epiphany/application.rb`. The tab
+  bar itself is never attached to the window; `window.rb`'s `content` is
+  `tab_overview` directly with no tab bar above the strip.
+- Context-menu-opened page tracking (`current_page`) is a real stand-in, but
+  the comment at `tab_view.rb:146-148` admits there is no context menu wired
+  at all yet (`notebook-context-menu.blp` is still unported, confirmed absent
+  from `lib/`).
+
+## `lib/page_menu_button.rb` (`src/ephy-page-menu-button.c`)
+
+`Gtk::MenuButton` + `Gtk::PopoverMenu` over a `Gio::Menu` with 5 sections, 13
+items total, matching the upstream `.blp`'s item set minus the web-app /
+window-management prunes the comment describes. **8 of the 13 items target
+an action that is never installed anywhere in the port**
+(`app.run-in-background`, `app.new-window`, `app.new-incognito`,
+`app.reopen-closed-tab`, `app.history`, `win.privacy-report`, `win.passwords`,
+`app.preferences`, `app.about`; `app.quit`, `app.shortcuts` and `win.fullscreen`
+are the only ones that resolve). See component-parity for the user-facing
+consequence.
+
+## `lib/action_bar_start.rb` / `lib/action_bar_end.rb` / `lib/action_bar.rb`
+
+Three `Gtk::Box` toolbars: back/forward (`toolbar.navigation-*`, dead per
+above), combined stop/reload (`toolbar.reload` — exists, but implemented as
+"refresh the title widget", not an actual reload of anything, since there is
+no page to reload), a bookmarks `Gtk::ToggleButton` (wired only to a bare
+`@toggle_bookmarks` lambda that flips its own `active` state — no bookmarks
+popover/dialog opens), a tab-overview button (`win.show-tab-overview`,
+resolves), a downloads `Gtk::MenuButton` whose `popover` is **never set** —
+`lib/action_bar_end.rb#downloads_button` and `lib/action_bar.rb#downloads_button`
+both build a bare `Gtk::MenuButton` with icon/tooltip and no `.popover =`,
+so clicking either does nothing visible even though `ActionBarEnd#show_downloads`
+calls `downloads_button.popup` on a menu button with no menu model attached.
+
+## `lib/action_helper.rb` (`src/ephy-action-helper.c`) — ✅ faithful, unused
+
+The bitmask logic matches upstream's `ephy_action_change_sensitivity_flags`.
+No caller anywhere in `lib/` currently invokes `ActionHelper.change_sensitivity_flags`
+— it is ported but not yet wired into any of the new action groups, so the
+multi-reason-disable behaviour it exists for is not exercised by anything,
+including the drive script.
+
+## Still entirely unported (unchanged from the prior inventory, re-confirmed against current `lib/` listing)
+
+Re-verified by `ls lib/` against the prior inventory's ❌ rows: every dialog
+(bookmarks, history, certificate, security, privacy report, the 6-page
+preferences dialog, both sync dialogs, encoding dialog, webapp-urls dialog),
+`location_entry.rb`/`location_controller.rb`/`suggestion_model.rb` (the
+actual editable address bar), `fullscreen_box.rb`, `site_menu_button.rb`,
+`context_menu_commands.rb`, `window_commands.rb`,
+`notebook_context_menu.rb`, `tab_overview_menu.rb`, `lockdown.rb`,
+`session.rb` (crash-restore), the entire web-extensions UI layer
+(`web_extension*.rb`, `browser_action*.rb`, `indicator_bin.rb`, `gizmo.rb`),
+every row type (`bookmark_row.rb`, `history_dialog_row.rb`,
+`encoding_row.rb`, `download_widget.rb`, `downloads_popover.rb`,
+`downloads_paintable.rb`), the about/error static pages, and app metadata
+(`.desktop`/`.metainfo`) remain absent from `lib/`, exactly as the prior
+inventory found. None of these appear in `lib/` after the latest commit.

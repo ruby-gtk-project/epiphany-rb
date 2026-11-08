@@ -1,129 +1,131 @@
-# Component parity — epiphany-rb vs origin/main
+# Component parity — epiphany-rb vs upstream `origin/main`
 
-Adversarial check: for every upstream component, does the port build the same
-widget, in the same count, with the same CSS classes, the same signals/actions,
-and the same translatable text? Verdict per component area below; "gap" means
-the axis cannot even be evaluated because the component does not exist.
+Audit date: 2026-11-08, against `ruby` @ `2b13b416b`. This is adversarial: it
+assumes nothing is done until read and runs the drive script rather than
+trusting its summary.
 
-This revision updates the base report for what changed this round
-(`download.rb`, `downloads_manager.rb`, `mouse_gesture_controller.rb`) and
-corrects one number the prior report got wrong (see below). Every section not
-mentioned as changed is unchanged from the base audit, re-verified by reading
-the current `lib/` tree and `origin/main` directly rather than trusting the
-prior text.
+## Verdict: not at parity. The app cannot browse the web.
 
-## Application shell (`lib/epiphany/application.rb` ← `ephy-shell.c` + `ephy-main.c`)
+Epiphany is a web browser. On `ruby`, there is no `EphyEmbed`/`WebKitWebView`
+layer anywhere — confirmed by grep (`grep -rn WebKitWebView lib/` → no hits;
+`WebKitWebProcessExtension` is used only for the sandboxed web-process-side
+message relay in `lib/web_process_extension.rb`, not for displaying pages).
+Every tab is an `Adwaita::StatusPage` placeholder
+(`lib/window.rb#placeholder_page`). Typing is not even possible — the header
+bar's center widget is permanently `TitleBox` (read-only label), never the
+editable `LocationEntry`, because `LocationEntry` does not exist in `lib/`.
+A user cannot navigate anywhere a maintainer did not hand-code as a
+`load_address` call. This is stated candidly in the commit message
+("standing in for the WebKit-backed EphyEmbed layer this round does not
+port") — it is not hidden, but it is also not a small gap: it is the
+product's core function.
 
-- **Count**: upstream installs 21 `app.` actions with accelerators. Reading
-  `lib/epiphany/application.rb` directly: the port installs **2**
-  (`shortcuts`, `quit`) — not 8, which is what the prior round's
-  `component-identification.md` claimed. Correcting that number here and in
-  `component-identification.md`. 19 of 21 `app.` actions are gap, including
-  `app.preferences` and `app.about`.
-- **Style**: n/a — no dialogs to carry CSS classes for the missing 19.
-- **Behaviour**: the 2 that exist match upstream's accelerators. The missing
-  19 are not stubbed; pressing their shortcuts does nothing.
-- **Text**: n/a for the missing actions.
-- **Verdict: gap — 19 of 21 `app.` actions missing** (worse than previously
-  reported, because the previous count was wrong, not because anything
-  regressed).
+## Menu items that go nowhere
 
-## Main window (`ephy-window.c` → `lib/window.rb`)
+`PageMenuButton` (the header bar's hamburger menu, opened via a real,
+reachable `Gtk::MenuButton`) lists 13 items. Clicking 8 of them is silently
+inert because no action by that name is installed anywhere in the process
+(verified by reading `lib/epiphany/application.rb`'s `build`, which installs
+exactly `shortcuts` and `quit`, and `lib/window.rb`'s three action groups,
+which install `new-tab`, `fullscreen`, `show-tab-overview`,
+`navigation-back`, `navigation-forward`, `reload`, `close`):
 
-Unchanged from the base audit. `lib/window.rb` does not exist.
-`Epiphany::Application#build` still shows a bare `Adw.StatusPage`
-(`status_page`, confirmed by reading the current file) in place of the
-window's real content, and its own description string says so plainly: "The
-browsing window is not written yet." `window_action_groups` creates four
-empty `Gio::SimpleActionGroup`s (`win`, `toolbar`, `tab`, `popup`) as
-placeholders with zero actions in any of them — confirmed by reading
-`lib/epiphany/application.rb:121`. **Verdict: gap, total.** 0 of 101
-window-level actions exist (46 `win.` + 9 `tab.` + 13 `toolbar.` + 33
-`popup.`). No tab strip, split view, toast-overlay content, or
-password-generator popover.
+| Menu item | Action | Installed? |
+|---|---|---|
+| Run in Background | `app.run-in-background` | ❌ |
+| New Window | `app.new-window` | ❌ |
+| New Incognito Window | `app.new-incognito` | ❌ |
+| Reopen Closed Tab | `app.reopen-closed-tab` | ❌ |
+| Fullscreen | `win.fullscreen` | ✅ |
+| History | `app.history` | ❌ |
+| Privacy Report | `win.privacy-report` | ❌ |
+| Passwords | `win.passwords` | ❌ |
+| Preferences | `app.preferences` | ❌ |
+| Keyboard Shortcuts | `app.shortcuts` | ✅ |
+| About Web | `app.about` | ❌ |
+| Quit | `app.quit` | ✅ |
 
-## Mouse gestures (new this round)
+Upstream: every one of these resolves to a real dialog/window. A GTK
+`Gio::SimpleAction` lookup miss on `activate_action` is a silent no-op, not a
+crash, which is exactly why this would pass casual manual testing (menu
+opens, looks right, most clicks "do nothing" in a way that looks like the
+feature not being wired to this click rather than missing entirely) and why
+it needs to be named explicitly here.
 
-- Upstream: `src/ephy-mouse-gesture-controller.c` attaches a `GtkGestureDrag`
-  to the real window in the capture phase, restricted to the middle button
-  and to drags that begin over the web view.
-- Port: `lib/mouse_gesture_controller.rb` reimplements the direction-guessing
-  and action-activation logic against a `window_adapter` Struct
-  (`widget`/`action_group`) standing in for the real window, since there is
-  no web view to restrict the gesture-start check to and no real window to
-  attach to. Exercised by the drive script's single-stroke/two-stroke steps.
-- **Count**: logic ported 1:1 for the gesture-recognition algorithm.
-  **Behaviour caveat**: upstream's gesture only claims the sequence when it
-  starts over the web view widget, specifically to leave page text-selection
-  alone; the port has no web view to check against, so this constraint is
-  unverifiable until `lib/web_view.rb` exists. Flagging this rather than
-  calling it "ported": it is ported code with an unverifiable precondition.
-- **Verdict: partial.** Real logic, but untestable against its one upstream
-  safety constraint because the thing that constraint protects doesn't
-  exist in the port.
+## Back/forward buttons are permanently disabled
 
-## Downloads (new this round, partially)
+`lib/window.rb#build_toolbar_actions` constructs `navigation-back` and
+`navigation-forward` with `.tap { |a| a.enabled = false }`. Nothing in the
+window, the two action-bar files, or `test/drive_epiphany.rb` ever sets
+`enabled = true` on either action. `Page#can_go_back?`/`#can_go_forward?`
+are implemented correctly and used by `navigate_back`/`navigate_forward`
+themselves, but nothing connects them to the action's `enabled` state the
+way upstream's `sync_chromes_visibility`/back-forward-list `notify` handlers
+do. **The back and forward buttons in the action bars render but can never
+be clicked**, in any build, regardless of how much navigation history a tab
+has. The drive script's "window tabs and navigation" step calls
+`app.window.navigate_back` / `navigate_forward` directly on the `Window`
+object, never through the `toolbar.navigation-back` action a real button
+click would invoke — so the dead button is invisible to the only check that
+exercises this area.
 
-- `lib/download.rb`, `lib/downloads_manager.rb`: ported as in-process models
-  (uid counter, action enum, destination handling) exercised by the drive
-  script.
-- `downloads_popover.rb`, `download_widget.rb`, `downloads_paintable.rb`:
-  **still none exist.** No download can be shown or managed through any
-  widget; the models exist with nothing rendering them.
-- **Verdict: gap, UI entirely** (model layer now has a real candidate — the
-  one upgrade this round makes to this section versus the base report, which
-  previously listed "none exist" for the whole group including the model).
+## Downloads buttons have no popover
 
-## Toolbars and location entry
+`ActionBarEnd#downloads_button` and `ActionBar#downloads_button` each build
+a bare `Gtk::MenuButton` with an icon and tooltip and never set `.popover`.
+`ActionBarEnd#show_downloads` (upstream: `ephy_action_bar_end_show_downloads`)
+calls `downloads_button.popup`, which pops an empty/non-existent menu.
+Upstream's button opens `EphyDownloadsPopover`, a full list of in-progress
+and finished downloads; this port's downloads button is decorative.
 
-Unchanged, confirmed by re-listing `lib/`: `action_bar*.rb`,
-`location_entry.rb`, `location_controller.rb`, `suggestion_model.rb`,
-`page_menu_button.rb`, `site_menu_button.rb` — **none exist.** No address
-bar. **Verdict: gap, total.**
+## Bookmarks toggle button opens nothing
 
-## Bookmarks
+`ActionBarEnd#bookmarks_button` wires `clicked` to a bare
+`@toggle_bookmarks` lambda the window passes in, and `Window#toggle_bookmarks`
+(`lib/window.rb`) is defined as flipping the button's own `active` state —
+`header_bar.action_bar_end.bookmarks_button.active = !...active?`. There is
+no bookmarks popover or `bookmarks_dialog.rb` for it to reveal (confirmed
+absent from `lib/`, same as the prior inventory found). The toggle button
+toggles itself and nothing else.
 
-Unchanged. Model layer ported and exercised; UI layer
-(`bookmarks_dialog.rb`, `bookmark_row.rb`, `bookmark_properties.rb`) — none
-exist. **Verdict: model has parity-eligible candidates; UI total gap.**
+## Things that are genuinely at parity in this slice
 
-## History
+Verified by reading against upstream and by the drive run:
 
-Unchanged. Neither dialog nor model/service exists. **Verdict: gap, total.**
+- `TitleBox` (`lib/title_box.rb`) — widget tree and `TitleWidget` contract
+  match `src/ephy-title-box.c`.
+- `TabView` (`lib/tab_view.rb`) — every exposed operation calls the real
+  `AdwTabView` API (add/close/pin/reorder/iterate); no stubs found on read.
+  (Its `attach_tab_bar` is real but dead code — see below.)
+- `ActionHelper` (`lib/action_helper.rb`) — bitmask sensitivity logic matches
+  `ephy_action_change_sensitivity_flags`, though nothing calls it yet.
+- Fullscreen restore-button swap (`HeaderBar#sync_fullscreen`) — wired to a
+  real `notify::fullscreened` signal, matches `fullscreen_changed_cb`.
+- Window chrome bitmask (`CHROME_HEADER_BAR`/`CHROME_BOOKMARKS`/`CHROME_MENU`)
+  — matches `EphyWindowChrome`'s subset this port reads.
+- Everything the prior `component-parity.md`/`component-inventory.md`
+  already verified at the model layer (bookmarks manager, search engine
+  manager, permissions, downloads model, encodings, sync utils, certificate
+  parsing via `gcr-rb`, notifications, OpenSearch parsing) — re-read, still
+  accurate, not re-litigated here.
 
-## Preferences (6 pages + dialog + supporting rows/dialogs)
+## Dead code found this pass
 
-Unchanged — confirmed `app.preferences` is still not one of the 2 actions
-that exist (it would need to be among the missing 19). **Verdict: gap,
-total**, and now there isn't even an action binding to open it.
+- `TabView#attach_tab_bar` — built, correct, never called. The window has no
+  tab bar above its tab strip at all; `Window#content` returns
+  `tab_overview` directly.
+- `ActionHelper.change_sensitivity_flags` — ported, never invoked.
 
-## Data views, security/privacy, Firefox Sync, encoding UI, web extensions,
-## embed layer
+## Unchanged, still-missing surfaces (carried from the prior inventory, re-verified against current `lib/`)
 
-Unchanged from the base report; re-confirmed none of these files exist in
-`lib/`. `permissions_manager.rb`, `sync_utils.rb`, `encoding.rb`/
-`encodings.rb` model layers remain the only real candidates; no UI for any
-of them.
-
-## Notifications
-
-Unchanged, still a genuinely strong area: `notification.rb` +
-`notification_container.rb` exist and are exercised.
-
-## Non-UI support
-
-Unchanged except `downloads_manager.rb` is no longer "none exist" (see
-Downloads above). GResource bundle, icons, `po/` wiring, search provider,
-web-app provider, snapshot/favicon services, SQLite/history storage: still
-all absent.
-
-## Summary verdict
-
-**Not clean.** Of roughly 82 distinct upstream UI component files, the port
-has shipped UI for **zero** of them — still true after this round's
-additions, which are both model/controller classes with no widget tree. The
-one number that moved against the port rather than for it: the `app.`
-action count is 2, not the 8 a prior report claimed — a correction, not a
-regression, but it means the gap on that axis is wider than this repo's own
-documentation previously said. No empty state and no error state listed in
-the upstream inventory exists in the port.
+Every dialog in the app (bookmarks, history, certificate, security, privacy
+report, the full preferences dialog and its ~10 pages, both sync dialogs,
+encoding dialog/row, webapp-additional-urls), the editable address bar
+(`LocationEntry`/`LocationController`/suggestion model), the find toolbar's
+UI half (only the bare `SearchEntry` widget exists; it is not wired into any
+find-in-page flow), fullscreen box, site menu button, notebook/tab-overview
+context menus, lockdown policy, session crash-restore, and the entire
+WebExtensions UI layer are still absent. None of this is new to this pass;
+it is restated because the task calls a narrow drive run a parity gap in its
+own right, and none of these surfaces are reachable by any check, manual or
+automated, in this repository.

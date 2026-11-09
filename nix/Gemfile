@@ -9,10 +9,10 @@
 source "https://rubygems.org"
 
 gem "adwaita"
-gem "gtk4"
-gem "glib2"
 gem "ashpd"
 gem "gcr-rb"
+gem "glib2"
+gem "gtk4"
+gem "rexml"
 gem "soup3"
 gem "webkit-web-process-extension"
-gem "rexml"
